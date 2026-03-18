@@ -23,9 +23,8 @@ public class UET2APluginEditor : ModuleRules
 			"SlateCore",
 			"InputCore",
 			"ToolMenus",
-			"PropertyEditor",
-			"IKRig",
-			"WorkspaceMenuStructure"
+			"WorkspaceMenuStructure",
+			"DesktopPlatform"
 		});
 	}
 }

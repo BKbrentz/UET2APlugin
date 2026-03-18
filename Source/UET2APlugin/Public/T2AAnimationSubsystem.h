@@ -10,11 +10,8 @@
 class UHunyuanMotionAPI;
 class UFBXDownloader;
 class URuntimeFBXImporter;
-class URuntimeIKRetargeter;
 class UAnimSequence;
 class USkeleton;
-class UIKRetargeter;
-class USkeletalMeshComponent;
 
 /** Pipeline stage enumeration */
 UENUM(BlueprintType)
@@ -25,8 +22,6 @@ enum class ET2APipelineStage : uint8
 	Polling			UMETA(DisplayName = "Waiting for Generation"),
 	Downloading		UMETA(DisplayName = "Downloading FBX"),
 	Importing		UMETA(DisplayName = "Importing Animation"),
-	Retargeting		UMETA(DisplayName = "Retargeting Animation"),
-	Applying		UMETA(DisplayName = "Applying Animation"),
 	Completed		UMETA(DisplayName = "Completed"),
 	Failed			UMETA(DisplayName = "Failed")
 };
@@ -50,16 +45,7 @@ struct FT2APipelineConfig
 	bool bDisableRewrite = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "T2A")
-	USkeletalMeshComponent* TargetCharacter = nullptr;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "T2A")
-	UIKRetargeter* RetargetAsset = nullptr;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "T2A")
-	bool bAutoPlay = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "T2A")
-	bool bLooping = false;
+	FString LocalFBXFilePath;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnPipelineProgress, ET2APipelineStage, Stage, float, Progress, const FString&, StatusMessage);
@@ -72,8 +58,8 @@ DECLARE_MULTICAST_DELEGATE_TwoParams(FOnPipelineFailedNative, ET2APipelineStage,
 
 /**
  * T2A Animation Pipeline Subsystem.
- * Manages the complete Text-to-Animation pipeline:
- * Text → API → Download → Import → Retarget → Play
+ * Manages the streamlined Text-to-Animation pipeline:
+ * Text → API → Download → Import
  * 
  * Lives on the GameInstance, available throughout the game session.
  */
@@ -115,6 +101,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "T2A|Pipeline")
 	bool IsRunning() const { return CurrentStage != ET2APipelineStage::Idle && CurrentStage != ET2APipelineStage::Completed && CurrentStage != ET2APipelineStage::Failed; }
 
+	/** Human-readable summary for the last completed run */
+	UFUNCTION(BlueprintPure, Category = "T2A|Pipeline")
+	FString GetLastCompletionSummary() const { return LastCompletionSummary; }
+
 	// ==================== Component Access ====================
 
 	/** Get the API handler */
@@ -124,10 +114,6 @@ public:
 	/** Get the FBX importer */
 	UFUNCTION(BlueprintPure, Category = "T2A|Pipeline")
 	URuntimeFBXImporter* GetImporter() const { return Importer; }
-
-	/** Get the IK retargeter */
-	UFUNCTION(BlueprintPure, Category = "T2A|Pipeline")
-	URuntimeIKRetargeter* GetRetargeter() const { return Retargeter; }
 
 	// ==================== Delegates ====================
 
@@ -150,9 +136,7 @@ private:
 	void StartPolling(const FString& TaskId);
 	void StartDownloading(const FString& FBXURL);
 	void StartImporting(const FString& LocalFilePath);
-	void StartRetargeting(UAnimSequence* SourceAnim, USkeleton* SourceSkeleton);
-	void ApplyAnimation(UAnimSequence* FinalAnim);
-	void FinishPipeline(UAnimSequence* FinalAnim, const FString& Prompt);
+	void FinishPipeline(UAnimSequence* ImportedAnim, const FString& Prompt);
 	void FailPipeline(const FString& Error);
 
 	// Internal callbacks
@@ -174,11 +158,10 @@ private:
 	UFBXDownloader* Downloader;
 	UPROPERTY()
 	URuntimeFBXImporter* Importer;
-	UPROPERTY()
-	URuntimeIKRetargeter* Retargeter;
 
 	// Pipeline state
 	ET2APipelineStage CurrentStage = ET2APipelineStage::Idle;
 	FT2APipelineConfig CurrentConfig;
 	FString CurrentRewrittenPrompt;
+	FString LastCompletionSummary;
 };

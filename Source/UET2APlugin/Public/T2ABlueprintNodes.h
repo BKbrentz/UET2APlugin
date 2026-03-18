@@ -7,23 +7,16 @@
 #include "T2AAnimationSubsystem.h"
 #include "T2ABlueprintNodes.generated.h"
 
-class UIKRetargeter;
-class USkeletalMeshComponent;
-
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnMotionGenProgress, ET2APipelineStage, Stage, float, Percent, const FString&, StatusMessage);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnMotionGenCompleted, UAnimSequence*, Animation, const FString&, RewrittenPrompt);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnMotionGenFailed, const FString&, ErrorMessage);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_SixParams(FOnMotionGenEvent, ET2APipelineStage, Stage, float, Percent, const FString&, StatusMessage, UAnimSequence*, ImportedAnimation, const FString&, RewrittenPrompt, const FString&, ErrorMessage);
 
 /**
- * Blueprint async node: Generate and Apply Motion from Text
- * 
- * One node does the entire pipeline:
- * Text Prompt → Hunyuan API → Download FBX → Import → Retarget → Play
- * 
- * Usage in Blueprint:
- *   1. Connect text prompt and target character
- *   2. Wire up OnProgress / OnCompleted / OnFailed
- *   3. Done!
+ * Blueprint async node: Generate Motion from Text.
+ *
+ * One node does the streamlined pipeline:
+ * Text Prompt → Hunyuan API → Download FBX → Import
+ *
+ * The underlying class name is kept for backward compatibility, but the node no
+ * longer performs auto-retargeting or auto-play.
  */
 UCLASS(meta=(BlueprintInternalUseOnly="true"))
 class UET2APLUGIN_API UGenerateAndApplyMotionAsync : public UBlueprintAsyncActionBase
@@ -32,39 +25,31 @@ class UET2APLUGIN_API UGenerateAndApplyMotionAsync : public UBlueprintAsyncActio
 
 public:
 	/**
-	 * Generate animation from text and optionally apply to a character.
-	 * 
+	 * Generate animation from text and return the imported FBX animation.
+	 *
 	 * @param WorldContextObject  World context
 	 * @param TextPrompt          Text description of the desired animation
 	 * @param Duration            Animation duration in seconds (1-12)
-	 * @param TargetCharacter     Character to apply animation to (optional)
-	 * @param RetargetAsset       IKRetargeter asset for bone mapping (optional, auto-maps if null)
-	 * @param bAutoPlay           Whether to automatically play on TargetCharacter
-	 * @param bLooping            Whether the animation should loop
 	 */
 	UFUNCTION(BlueprintCallable, meta=(BlueprintInternalUseOnly="true", WorldContext="WorldContextObject", DisplayName="Generate Motion from Text"), Category="T2A")
 	static UGenerateAndApplyMotionAsync* GenerateMotionFromText(
 		UObject* WorldContextObject,
 		const FString& TextPrompt,
-		int32 Duration = 5,
-		USkeletalMeshComponent* TargetCharacter = nullptr,
-		UIKRetargeter* RetargetAsset = nullptr,
-		bool bAutoPlay = true,
-		bool bLooping = false);
+		int32 Duration = 5);
 
 	// ==================== Output Pins ====================
 
-	/** Fired during pipeline execution with progress updates */
+	/** All async outputs share one signature so Blueprint pins stay consistent across events */
 	UPROPERTY(BlueprintAssignable)
-	FOnMotionGenProgress OnProgress;
+	FOnMotionGenEvent OnProgress;
 
-	/** Fired when animation generation and retargeting completes */
+	/** Fired when animation generation and import completes */
 	UPROPERTY(BlueprintAssignable)
-	FOnMotionGenCompleted OnCompleted;
+	FOnMotionGenEvent OnCompleted;
 
 	/** Fired if any stage of the pipeline fails */
 	UPROPERTY(BlueprintAssignable)
-	FOnMotionGenFailed OnFailed;
+	FOnMotionGenEvent OnFailed;
 
 	// UBlueprintAsyncActionBase
 	virtual void Activate() override;
@@ -73,7 +58,7 @@ private:
 	UFUNCTION()
 	void HandleProgress(ET2APipelineStage Stage, float Progress, const FString& StatusMessage);
 	UFUNCTION()
-	void HandleCompleted(UAnimSequence* Animation, const FString& RewrittenPrompt);
+	void HandleCompleted(UAnimSequence* ImportedAnimation, const FString& RewrittenPrompt);
 	UFUNCTION()
 	void HandleFailed(ET2APipelineStage FailedStage, const FString& ErrorMessage);
 

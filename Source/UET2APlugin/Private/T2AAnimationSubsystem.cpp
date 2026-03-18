@@ -5,10 +5,8 @@
 #include "HunyuanMotionAPI.h"
 #include "FBXDownloader.h"
 #include "RuntimeFBXImporter.h"
-#include "RuntimeIKRetargeter.h"
-#include "Components/SkeletalMeshComponent.h"
 #include "Animation/AnimSequence.h"
-#include "Retargeter/IKRetargeter.h"
+#include "Misc/Paths.h"
 
 // ==================== Lifecycle ====================
 
@@ -20,7 +18,6 @@ void UT2AAnimationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	API = NewObject<UHunyuanMotionAPI>(this);
 	Downloader = NewObject<UFBXDownloader>(this);
 	Importer = NewObject<URuntimeFBXImporter>(this);
-	Retargeter = NewObject<URuntimeIKRetargeter>(this);
 
 	// Bind API callbacks
 	API->OnTaskSubmitted.AddDynamic(this, &UT2AAnimationSubsystem::OnTaskSubmitted);
@@ -72,6 +69,22 @@ void UT2AAnimationSubsystem::RunPipeline(const FT2APipelineConfig& Config)
 
 	CurrentConfig = Config;
 	CurrentRewrittenPrompt.Empty();
+	LastCompletionSummary.Empty();
+
+	if (!CurrentConfig.LocalFBXFilePath.IsEmpty())
+	{
+		CurrentConfig.LocalFBXFilePath = FPaths::ConvertRelativePathToFull(CurrentConfig.LocalFBXFilePath);
+
+		if (!FPaths::FileExists(CurrentConfig.LocalFBXFilePath))
+		{
+			FailPipeline(FString::Printf(TEXT("Local FBX file does not exist: %s"), *CurrentConfig.LocalFBXFilePath));
+			return;
+		}
+
+		UE_LOG(LogT2A, Log, TEXT("Starting T2A pipeline from local FBX: %s"), *CurrentConfig.LocalFBXFilePath);
+		StartImporting(CurrentConfig.LocalFBXFilePath);
+		return;
+	}
 
 	if (Config.TextPrompt.IsEmpty())
 	{
@@ -79,7 +92,7 @@ void UT2AAnimationSubsystem::RunPipeline(const FT2APipelineConfig& Config)
 		return;
 	}
 
-	if (API->GetAPIKey().IsEmpty())
+	if (!API || API->GetAPIKey().IsEmpty())
 	{
 		FailPipeline(TEXT("API Key is not configured. Call SetAPIKey() first."));
 		return;
@@ -91,9 +104,16 @@ void UT2AAnimationSubsystem::RunPipeline(const FT2APipelineConfig& Config)
 
 void UT2AAnimationSubsystem::CancelPipeline()
 {
-	if (API) API->StopPolling();
-	if (Downloader) Downloader->CancelDownload();
-	
+	if (API)
+	{
+		API->StopPolling();
+	}
+
+	if (Downloader)
+	{
+		Downloader->CancelDownload();
+	}
+
 	CurrentStage = ET2APipelineStage::Idle;
 	UE_LOG(LogT2A, Log, TEXT("Pipeline cancelled"));
 }
@@ -158,20 +178,18 @@ void UT2AAnimationSubsystem::OnTaskCompleted(const FHunyuanMotionResult& Result,
 		return;
 	}
 
-	// Get the first FBX URL from results
 	if (Result.MotionEntries.Num() == 0 || Result.MotionEntries[0].Files.Num() == 0)
 	{
 		FailPipeline(TEXT("No FBX files in API response"));
 		return;
 	}
 
-	// Save rewritten prompt if available
 	if (Result.MotionEntries[0].Prompt.Len() > 0)
 	{
 		CurrentRewrittenPrompt = Result.MotionEntries[0].Prompt;
 	}
 
-	FString FBXURL = Result.MotionEntries[0].Files[0];
+	const FString FBXURL = Result.MotionEntries[0].Files[0];
 	UE_LOG(LogT2A, Log, TEXT("Got FBX URL: %s"), *FBXURL);
 
 	StartDownloading(FBXURL);
@@ -209,106 +227,45 @@ void UT2AAnimationSubsystem::StartImporting(const FString& LocalFilePath)
 
 void UT2AAnimationSubsystem::OnImportComplete(UAnimSequence* Animation, USkeleton* Skeleton, const FString& ErrorMsg)
 {
-	if (!ErrorMsg.IsEmpty() || !Animation)
+	static_cast<void>(Skeleton);
+
+	if (!ErrorMsg.IsEmpty() || !Animation || !Skeleton)
 	{
 		FailPipeline(FString::Printf(TEXT("Import failed: %s"), *ErrorMsg));
 		return;
 	}
 
 	UE_LOG(LogT2A, Log, TEXT("Animation imported successfully"));
-	StartRetargeting(Animation, Skeleton);
+	LastCompletionSummary = CurrentConfig.LocalFBXFilePath.IsEmpty()
+		? TEXT("Done! Animation generated, downloaded, and imported successfully.")
+		: TEXT("Done! Local FBX imported successfully.");
+
+	const FString CompletionPrompt = CurrentRewrittenPrompt.IsEmpty() ? CurrentConfig.TextPrompt : CurrentRewrittenPrompt;
+	FinishPipeline(Animation, CompletionPrompt);
 }
 
-void UT2AAnimationSubsystem::StartRetargeting(UAnimSequence* SourceAnim, USkeleton* SourceSkeleton)
-{
-	// Check if retargeting is needed
-	if (!CurrentConfig.TargetCharacter)
-	{
-		// No target character specified - return source animation as-is
-		UE_LOG(LogT2A, Log, TEXT("No target character, skipping retarget"));
-		FinishPipeline(SourceAnim, CurrentRewrittenPrompt);
-		return;
-	}
-
-	USkeletalMesh* TargetMesh = CurrentConfig.TargetCharacter->GetSkeletalMeshAsset();
-	if (!TargetMesh)
-	{
-		UE_LOG(LogT2A, Warning, TEXT("Target character has no skeletal mesh, skipping retarget"));
-		FinishPipeline(SourceAnim, CurrentRewrittenPrompt);
-		return;
-	}
-
-	USkeleton* TargetSkeleton = TargetMesh->GetSkeleton();
-	if (!TargetSkeleton)
-	{
-		UE_LOG(LogT2A, Warning, TEXT("Target mesh has no skeleton, skipping retarget"));
-		FinishPipeline(SourceAnim, CurrentRewrittenPrompt);
-		return;
-	}
-
-	// Check compatibility
-	if (URuntimeIKRetargeter::AreSkeletonsCompatible(SourceSkeleton, TargetSkeleton))
-	{
-		UE_LOG(LogT2A, Log, TEXT("Skeletons compatible, skipping retarget"));
-		FinishPipeline(SourceAnim, CurrentRewrittenPrompt);
-		return;
-	}
-
-	CurrentStage = ET2APipelineStage::Retargeting;
-	OnPipelineProgress.Broadcast(CurrentStage, 0.8f, TEXT("Retargeting animation..."));
-	OnPipelineProgressNative.Broadcast(CurrentStage, 0.8f, TEXT("Retargeting animation..."));
-
-	UAnimSequence* RetargetedAnim = Retargeter->RetargetAnimation(
-		SourceAnim,
-		SourceSkeleton,
-		TargetMesh,
-		CurrentConfig.RetargetAsset);
-
-	if (!RetargetedAnim)
-	{
-		UE_LOG(LogT2A, Warning, TEXT("Retargeting failed, using source animation"));
-		FinishPipeline(SourceAnim, CurrentRewrittenPrompt);
-		return;
-	}
-
-	UE_LOG(LogT2A, Log, TEXT("Animation retargeted successfully"));
-	FinishPipeline(RetargetedAnim, CurrentRewrittenPrompt);
-}
-
-void UT2AAnimationSubsystem::ApplyAnimation(UAnimSequence* FinalAnim)
-{
-	if (!CurrentConfig.TargetCharacter || !FinalAnim) return;
-
-	CurrentConfig.TargetCharacter->PlayAnimation(FinalAnim, CurrentConfig.bLooping);
-	UE_LOG(LogT2A, Log, TEXT("Animation applied to target character (looping: %s)"), 
-		CurrentConfig.bLooping ? TEXT("true") : TEXT("false"));
-}
-
-void UT2AAnimationSubsystem::FinishPipeline(UAnimSequence* FinalAnim, const FString& Prompt)
+void UT2AAnimationSubsystem::FinishPipeline(UAnimSequence* ImportedAnim, const FString& Prompt)
 {
 	CurrentStage = ET2APipelineStage::Completed;
-	
-	// Auto-apply if configured
-	if (CurrentConfig.bAutoPlay && CurrentConfig.TargetCharacter && FinalAnim)
+
+	if (LastCompletionSummary.IsEmpty())
 	{
-		CurrentStage = ET2APipelineStage::Applying;
-		OnPipelineProgress.Broadcast(CurrentStage, 0.95f, TEXT("Applying animation to character..."));
-		OnPipelineProgressNative.Broadcast(CurrentStage, 0.95f, TEXT("Applying animation to character..."));
-		ApplyAnimation(FinalAnim);
+		LastCompletionSummary = CurrentConfig.LocalFBXFilePath.IsEmpty()
+			? TEXT("Done! Animation imported successfully.")
+			: TEXT("Done! Local FBX imported successfully.");
 	}
 
-	CurrentStage = ET2APipelineStage::Completed;
-	OnPipelineProgress.Broadcast(CurrentStage, 1.0f, TEXT("Done!"));
-	OnPipelineProgressNative.Broadcast(CurrentStage, 1.0f, TEXT("Done!"));
-	OnPipelineCompleted.Broadcast(FinalAnim, Prompt);
-	OnPipelineCompletedNative.Broadcast(FinalAnim, Prompt);
+	OnPipelineProgress.Broadcast(CurrentStage, 1.0f, LastCompletionSummary);
+	OnPipelineProgressNative.Broadcast(CurrentStage, 1.0f, LastCompletionSummary);
+	OnPipelineCompleted.Broadcast(ImportedAnim, Prompt);
+	OnPipelineCompletedNative.Broadcast(ImportedAnim, Prompt);
 
-	UE_LOG(LogT2A, Log, TEXT("T2A Pipeline completed successfully!"));
+	UE_LOG(LogT2A, Log, TEXT("T2A Pipeline completed successfully! %s"), *LastCompletionSummary);
 }
 
 void UT2AAnimationSubsystem::FailPipeline(const FString& Error)
 {
-	ET2APipelineStage FailedStage = CurrentStage;
+	const ET2APipelineStage FailedStage = CurrentStage;
 	CurrentStage = ET2APipelineStage::Failed;
 
 	UE_LOG(LogT2A, Error, TEXT("T2A Pipeline failed at stage %d: %s"), (int32)FailedStage, *Error);

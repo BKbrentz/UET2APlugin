@@ -9,12 +9,13 @@
 
 /**
  * Editor debug panel for the T2A plugin.
- * Provides UI for text input, parameter configuration, and pipeline monitoring.
+ * Provides UI for text input, local FBX import, and pipeline monitoring.
  * Only available in editor builds.
  */
 class ST2AEditorPanel : public SCompoundWidget
 {
 public:
+
 	SLATE_BEGIN_ARGS(ST2AEditorPanel) {}
 	SLATE_END_ARGS()
 
@@ -23,6 +24,7 @@ public:
 private:
 	// UI building
 	TSharedRef<SWidget> BuildAPIConfigSection();
+	TSharedRef<SWidget> BuildLocalFBXSection();
 	TSharedRef<SWidget> BuildPromptInputSection();
 	TSharedRef<SWidget> BuildParameterSection();
 	TSharedRef<SWidget> BuildTargetSection();
@@ -33,6 +35,7 @@ private:
 	FReply OnGenerateClicked();
 	FReply OnCancelClicked();
 	FReply OnSaveAPIKeyClicked();
+	FReply OnBrowseLocalFBXClicked();
 
 	void BindSubsystemDelegates(UT2AAnimationSubsystem* Subsystem);
 	void UnbindSubsystemDelegates(UT2AAnimationSubsystem* Subsystem);
@@ -43,10 +46,12 @@ private:
 	void OnPipelineFailed(ET2APipelineStage FailedStage, const FString& ErrorMessage);
 
 	UT2AAnimationSubsystem* GetSubsystem() const;
+	UWorld* GetPIEWorld() const;
 
 	// UI State
 	FString APIKey;
 	FString TextPrompt;
+	FString LocalFBXFilePath;
 	int32 Duration = 5;
 	bool bDisableRewrite = false;
 	FString StatusText = TEXT("Ready");
@@ -55,6 +60,7 @@ private:
 
 	// Widget refs for updates
 	TSharedPtr<class SEditableTextBox> APIKeyInput;
+	TSharedPtr<class SEditableTextBox> LocalFBXInput;
 	TSharedPtr<class SMultiLineEditableTextBox> PromptInput;
 	TSharedPtr<class SProgressBar> ProgressBar;
 	TSharedPtr<class STextBlock> StatusLabel;

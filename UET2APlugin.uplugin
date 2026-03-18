@@ -3,7 +3,7 @@
 	"Version": 1,
 	"VersionName": "1.0.0",
 	"FriendlyName": "UE Text-to-Animation Plugin",
-	"Description": "Runtime plugin for generating skeletal animations from text prompts via Hunyuan Motion API, with IK retargeting support.",
+	"Description": "Runtime plugin for generating skeletal animations from text prompts via Hunyuan Motion API, downloading FBX files, and importing them at runtime.",
 	"Category": "Animation",
 	"CreatedBy": "UET2A Team",
 	"CreatedByURL": "",
@@ -33,12 +33,6 @@
 				"Mac",
 				"Linux"
 			]
-		}
-	],
-	"Plugins": [
-		{
-			"Name": "IKRig",
-			"Enabled": true
 		}
 	]
 }

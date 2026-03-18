@@ -17,8 +17,7 @@ public class UET2APlugin : ModuleRules
 			"HTTP",
 			"Json",
 			"JsonUtilities",
-			"AnimationCore",
-			"IKRig"
+			"AnimationCore"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]
