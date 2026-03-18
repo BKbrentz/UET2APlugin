@@ -238,23 +238,61 @@ void UHunyuanMotionAPI::StartPollingTask(const FString& TaskId)
 
 	CurrentPollingTaskId = TaskId;
 	PollCount = 0;
+	PollingStartTime = FPlatformTime::Seconds();
 	bIsPolling = true;
 
 	UE_LOG(LogT2A, Log, TEXT("Starting poll for task: %s"), *TaskId);
+	ScheduleNextPoll(GetNextPollDelay());
+}
 
-	// First poll immediately
-	QueryTaskStatus(TaskId);
+void UHunyuanMotionAPI::ScheduleNextPoll(float DelaySeconds)
+{
+	if (!bIsPolling)
+	{
+		return;
+	}
 
-	// Set up ticker for subsequent polls
+	if (PollingTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(PollingTickerHandle);
+		PollingTickerHandle.Reset();
+	}
+
 	PollingTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
 		FTickerDelegate::CreateLambda([this](float DeltaTime) -> bool
 		{
-			if (!bIsPolling) return false;
+			PollingTickerHandle.Reset();
+			if (!bIsPolling)
+			{
+				return false;
+			}
+
 			PollTick();
-			return true; // Keep ticking
+			return false;
 		}),
-		InitialPollInterval // Start with 1s interval
+		DelaySeconds
 	);
+}
+
+float UHunyuanMotionAPI::GetNextPollDelay() const
+{
+	if (PollCount == 0)
+	{
+		return FirstPollDelay;
+	}
+
+	const float ElapsedSeconds = static_cast<float>(FPlatformTime::Seconds() - PollingStartTime);
+	if (ElapsedSeconds < FastPollWindowStart)
+	{
+		return FMath::Max(0.1f, FastPollWindowStart - ElapsedSeconds);
+	}
+
+	if (ElapsedSeconds < FastPollWindowEnd)
+	{
+		return FastPollInterval;
+	}
+
+	return SlowPollInterval;
 }
 
 void UHunyuanMotionAPI::StopPolling()
@@ -267,6 +305,7 @@ void UHunyuanMotionAPI::StopPolling()
 	bIsPolling = false;
 	CurrentPollingTaskId.Empty();
 	PollCount = 0;
+	PollingStartTime = 0.0;
 }
 
 void UHunyuanMotionAPI::PollTick()
@@ -286,22 +325,8 @@ void UHunyuanMotionAPI::PollTick()
 		return;
 	}
 
-	// Switch to longer interval after first poll
-	if (PollCount == 2)
-	{
-		FTSTicker::GetCoreTicker().RemoveTicker(PollingTickerHandle);
-		PollingTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
-			FTickerDelegate::CreateLambda([this](float DeltaTime) -> bool
-			{
-				if (!bIsPolling) return false;
-				PollTick();
-				return true;
-			}),
-			SubsequentPollInterval
-		);
-	}
-
 	QueryTaskStatus(CurrentPollingTaskId);
+	ScheduleNextPoll(GetNextPollDelay());
 }
 
 void UHunyuanMotionAPI::QueryTaskStatus(const FString& TaskId)

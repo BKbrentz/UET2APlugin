@@ -95,6 +95,8 @@ private:
 
 	// Polling
 	void PollTick();
+	void ScheduleNextPoll(float DelaySeconds);
+	float GetNextPollDelay() const;
 	FTSTicker::FDelegateHandle PollingTickerHandle;
 
 	// Config
@@ -105,7 +107,11 @@ private:
 	bool bIsPolling = false;
 	FString CurrentPollingTaskId;
 	int32 PollCount = 0;
-	static constexpr int32 MaxPollCount = 500; // ~1000s max at 2s interval
-	static constexpr float InitialPollInterval = 1.0f;
-	static constexpr float SubsequentPollInterval = 2.0f;
+	double PollingStartTime = 0.0;
+	static constexpr int32 MaxPollCount = 500; // ~991s max with current polling schedule
+	static constexpr float FirstPollDelay = 2.0f;
+	static constexpr float FastPollWindowStart = 5.0f;
+	static constexpr float FastPollWindowEnd = 15.0f;
+	static constexpr float FastPollInterval = 1.0f;
+	static constexpr float SlowPollInterval = 2.0f;
 };
