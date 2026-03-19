@@ -11,6 +11,106 @@
 #include "Serialization/JsonWriter.h"
 #include "Containers/Ticker.h"
 
+namespace
+{
+	void AddUniqueFileUrl(TArray<FString>& Files, const FString& FileUrl)
+	{
+		const FString TrimmedUrl = FileUrl.TrimStartAndEnd();
+		if (!TrimmedUrl.IsEmpty())
+		{
+			Files.AddUnique(TrimmedUrl);
+		}
+	}
+
+	void AppendDirectFileUrlFields(const TSharedPtr<FJsonObject>& JsonObj, TArray<FString>& Files)
+	{
+		if (!JsonObj.IsValid())
+		{
+			return;
+		}
+
+		static const TCHAR* CandidateFields[] =
+		{
+			TEXT("url"),
+			TEXT("file_url"),
+			TEXT("download_url"),
+			TEXT("output_url"),
+			TEXT("cos_url"),
+			TEXT("fbx_url"),
+			TEXT("retarget_fbx_url")
+		};
+
+		for (const TCHAR* FieldName : CandidateFields)
+		{
+			FString FileUrl;
+			if (JsonObj->TryGetStringField(FieldName, FileUrl))
+			{
+				AddUniqueFileUrl(Files, FileUrl);
+			}
+		}
+	}
+
+	void AppendFileUrlsFromValue(const TSharedPtr<FJsonValue>& FileVal, TArray<FString>& Files)
+	{
+		if (!FileVal.IsValid())
+		{
+			return;
+		}
+
+		FString FileUrl;
+		if (FileVal->TryGetString(FileUrl))
+		{
+			AddUniqueFileUrl(Files, FileUrl);
+			return;
+		}
+
+		const TSharedPtr<FJsonObject>* FileObj;
+		if (FileVal->TryGetObject(FileObj))
+		{
+			AppendDirectFileUrlFields(*FileObj, Files);
+		}
+	}
+
+	void AppendFileUrlsFromArrayField(const TSharedPtr<FJsonObject>& JsonObj, const TCHAR* FieldName, TArray<FString>& Files)
+	{
+		if (!JsonObj.IsValid())
+		{
+			return;
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* FilesArray;
+		if (JsonObj->TryGetArrayField(FieldName, FilesArray))
+		{
+			for (const TSharedPtr<FJsonValue>& FileVal : *FilesArray)
+			{
+				AppendFileUrlsFromValue(FileVal, Files);
+			}
+		}
+	}
+
+	int32 CountDownloadableFiles(const FHunyuanMotionResult& Result)
+	{
+		int32 TotalFiles = 0;
+		for (const FHunyuanMotionResultEntry& Entry : Result.MotionEntries)
+		{
+			TotalFiles += Entry.Files.Num();
+		}
+
+		return TotalFiles;
+	}
+
+	FString BuildEntryFileSummary(const FHunyuanMotionResult& Result)
+	{
+		TArray<FString> Parts;
+		for (int32 Index = 0; Index < Result.MotionEntries.Num(); ++Index)
+		{
+			Parts.Add(FString::Printf(TEXT("#%d:%d"), Index, Result.MotionEntries[Index].Files.Num()));
+		}
+
+		return Parts.Num() > 0 ? FString::Join(Parts, TEXT(", ")) : TEXT("none");
+	}
+}
+
 UHunyuanMotionAPI::UHunyuanMotionAPI()
 {
 }
@@ -116,19 +216,10 @@ FHunyuanMotionResult UHunyuanMotionAPI::ParseMotionResult(TSharedPtr<FJsonObject
 						(*EntryObj)->TryGetStringField(TEXT("prompt"), Entry.Prompt);
 						(*EntryObj)->TryGetStringField(TEXT("type"), Entry.Type);
 
-						const TArray<TSharedPtr<FJsonValue>>* FilesArray;
-						if ((*EntryObj)->TryGetArrayField(TEXT("files"), FilesArray))
-						{
-							for (const TSharedPtr<FJsonValue>& FileVal : *FilesArray)
-							{
-								FString FileUrl;
-								if (FileVal->TryGetString(FileUrl))
-								{
-									Entry.Files.Add(FileUrl);
-								}
-							}
-						}
-
+						AppendFileUrlsFromArrayField(*EntryObj, TEXT("fbx_files"), Entry.Files);
+						AppendFileUrlsFromArrayField(*EntryObj, TEXT("retarget_fbx_files"), Entry.Files);
+						AppendFileUrlsFromArrayField(*EntryObj, TEXT("files"), Entry.Files);
+						AppendDirectFileUrlFields(*EntryObj, Entry.Files);
 						Result.MotionEntries.Add(Entry);
 					}
 				}
@@ -238,7 +329,9 @@ void UHunyuanMotionAPI::StartPollingTask(const FString& TaskId)
 
 	CurrentPollingTaskId = TaskId;
 	PollCount = 0;
+	SuccessWithoutFilesCount = 0;
 	PollingStartTime = FPlatformTime::Seconds();
+	SuccessWithoutFilesStartTime = 0.0;
 	bIsPolling = true;
 
 	UE_LOG(LogT2A, Log, TEXT("Starting poll for task: %s"), *TaskId);
@@ -305,7 +398,9 @@ void UHunyuanMotionAPI::StopPolling()
 	bIsPolling = false;
 	CurrentPollingTaskId.Empty();
 	PollCount = 0;
+	SuccessWithoutFilesCount = 0;
 	PollingStartTime = 0.0;
+	SuccessWithoutFilesStartTime = 0.0;
 }
 
 void UHunyuanMotionAPI::PollTick()
@@ -359,6 +454,8 @@ void UHunyuanMotionAPI::OnQueryResponse(TSharedPtr<IHttpRequest, ESPMode::Thread
 	int32 ResponseCode = HttpResponse->GetResponseCode();
 	FString ResponseStr = HttpResponse->GetContentAsString();
 
+	UE_LOG(LogT2A, Verbose, TEXT("Query response [%d]: %s"), ResponseCode, *ResponseStr);
+
 	TSharedPtr<FJsonObject> JsonObj;
 	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseStr);
 	if (!FJsonSerializer::Deserialize(Reader, JsonObj) || !JsonObj.IsValid())
@@ -394,18 +491,65 @@ void UHunyuanMotionAPI::OnQueryResponse(TSharedPtr<IHttpRequest, ESPMode::Thread
 	switch (Result.Status)
 	{
 	case EHunyuanTaskStatus::Pending:
+		SuccessWithoutFilesCount = 0;
+		SuccessWithoutFilesStartTime = 0.0;
 		OnTaskProgress.Broadcast(EHunyuanTaskStatus::Pending, TEXT("Queued - waiting for generation..."));
 		break;
 
 	case EHunyuanTaskStatus::Processing:
+		SuccessWithoutFilesCount = 0;
+		SuccessWithoutFilesStartTime = 0.0;
 		OnTaskProgress.Broadcast(EHunyuanTaskStatus::Processing, TEXT("Generating animation..."));
 		break;
 
 	case EHunyuanTaskStatus::Success:
-		UE_LOG(LogT2A, Log, TEXT("Task completed successfully! %d motion entries"), Result.MotionEntries.Num());
+	{
+		const int32 TotalFiles = CountDownloadableFiles(Result);
+		if (TotalFiles == 0)
+		{
+			const double CurrentTime = FPlatformTime::Seconds();
+			if (SuccessWithoutFilesStartTime <= 0.0)
+			{
+				SuccessWithoutFilesStartTime = CurrentTime;
+			}
+
+			SuccessWithoutFilesCount++;
+			const double WaitedSeconds = CurrentTime - SuccessWithoutFilesStartTime;
+			const bool bReachedAttemptLimit = SuccessWithoutFilesCount >= MaxSuccessWithoutFilesPolls;
+			const bool bReachedTimeLimit = WaitedSeconds >= MaxSuccessWithoutFilesWaitSeconds;
+
+			UE_LOG(LogT2A, Warning, TEXT("Task reported success but no downloadable FBX files are ready yet (attempt %d/%d, waited %.1fs/%.1fs, entries=%d, files per entry=%s)"),
+				SuccessWithoutFilesCount,
+				MaxSuccessWithoutFilesPolls,
+				WaitedSeconds,
+				MaxSuccessWithoutFilesWaitSeconds,
+				Result.MotionEntries.Num(),
+				*BuildEntryFileSummary(Result));
+			UE_LOG(LogT2A, Verbose, TEXT("Success-without-files payload: %s"), *ResponseStr);
+
+			if (bReachedAttemptLimit || bReachedTimeLimit)
+			{
+				UE_LOG(LogT2A, Warning, TEXT("Success-without-files final payload: %s"), *ResponseStr);
+				StopPolling();
+				FHunyuanMotionResult ErrorResult = Result;
+				ErrorResult.Status = EHunyuanTaskStatus::Failed;
+				ErrorResult.ErrorMessage = TEXT("Task succeeded but no FBX files became available in time.");
+				OnTaskCompleted.Broadcast(ErrorResult, ErrorResult.ErrorMessage);
+			}
+			else
+			{
+				OnTaskProgress.Broadcast(EHunyuanTaskStatus::Processing, TEXT("Generation finished, waiting for FBX files..."));
+			}
+			break;
+		}
+
+		SuccessWithoutFilesCount = 0;
+		SuccessWithoutFilesStartTime = 0.0;
+		UE_LOG(LogT2A, Log, TEXT("Task completed successfully! %d motion entries, %d downloadable files"), Result.MotionEntries.Num(), TotalFiles);
 		StopPolling();
 		OnTaskCompleted.Broadcast(Result, TEXT(""));
 		break;
+	}
 
 	case EHunyuanTaskStatus::Failed:
 		UE_LOG(LogT2A, Error, TEXT("Task failed: %s"), *Result.ErrorMessage);

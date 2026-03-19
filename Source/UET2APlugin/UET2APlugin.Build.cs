@@ -23,7 +23,8 @@ public class UET2APlugin : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"RenderCore",
-			"RHI"
+			"RHI",
+			"AssetRegistry"
 		});
 
 		// FBX SDK - Use the engine's built-in FBX external module

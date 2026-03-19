@@ -4,9 +4,14 @@
 #include "UET2APlugin.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/Skeleton.h"
-#include "Engine/SkeletalMesh.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Async/Async.h"
+#include "Engine/SkeletalMesh.h"
+#include "Misc/Guid.h"
+#include "Misc/PackageName.h"
 #include "Misc/Paths.h"
+#include "UObject/Package.h"
+#include "UObject/SavePackage.h"
 
 #if WITH_FBX_SDK
 // Disable warnings from FBX SDK headers
@@ -15,24 +20,126 @@ THIRD_PARTY_INCLUDES_START
 THIRD_PARTY_INCLUDES_END
 #endif
 
+namespace
+{
+FString NormalizeDestinationAssetFolder(const FString& DestinationAssetFolder)
+{
+	FString NormalizedFolder = DestinationAssetFolder.TrimStartAndEnd();
+	if (NormalizedFolder.IsEmpty())
+	{
+		return FString();
+	}
+
+	if (!NormalizedFolder.StartsWith(TEXT("/Game")))
+	{
+		NormalizedFolder.RemoveFromStart(TEXT("/"));
+		NormalizedFolder = TEXT("/Game/") + NormalizedFolder;
+	}
+
+	while (NormalizedFolder.Len() > 5 && NormalizedFolder.EndsWith(TEXT("/")))
+	{
+		NormalizedFolder.LeftChopInline(1, false);
+	}
+
+	return NormalizedFolder;
+}
+
+FString SanitizeAssetName(const FString& InName, const TCHAR* FallbackName)
+{
+	FString SanitizedName;
+	SanitizedName.Reserve(InName.Len());
+
+	for (const TCHAR Character : InName)
+	{
+		SanitizedName.AppendChar((FChar::IsAlnum(Character) || Character == TEXT('_')) ? Character : TEXT('_'));
+	}
+
+	while (SanitizedName.ReplaceInline(TEXT("__"), TEXT("_")) > 0)
+	{
+	}
+
+	if (SanitizedName.IsEmpty())
+	{
+		SanitizedName = FallbackName;
+	}
+
+	return SanitizedName;
+}
+
+FString MakeImportedAssetBaseName(const FString& InName)
+{
+	const FString BaseName = SanitizeAssetName(InName, TEXT("ImportedAnimation"));
+	const FString UniqueSuffix = FGuid::NewGuid().ToString(EGuidFormats::Digits).Left(8);
+	return FString::Printf(TEXT("%s_%s"), *BaseName, *UniqueSuffix);
+}
+
+#if WITH_EDITOR
+bool SaveCreatedAsset(UObject* Asset)
+{
+	if (!Asset)
+	{
+		return false;
+	}
+
+	UPackage* Package = Asset->GetOutermost();
+	if (!Package)
+	{
+		return false;
+	}
+
+	Asset->MarkPackageDirty();
+	Package->MarkPackageDirty();
+	FAssetRegistryModule::AssetCreated(Asset);
+
+	const FString PackageFileName = FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension());
+	FSavePackageArgs SaveArgs;
+	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+
+	return UPackage::SavePackage(Package, Asset, *PackageFileName, SaveArgs);
+}
+#endif
+} // namespace
+
 // ==================== Async Import ====================
 
 void URuntimeFBXImporter::ImportFBXAnimationAsync(const FString& FilePath)
 {
+	ImportFBXAnimationAsyncToFolder(FilePath, FString());
+}
+
+void URuntimeFBXImporter::ImportFBXAnimationAsyncToFolder(const FString& FilePath, const FString& DestinationAssetFolder)
+{
+	const FString NormalizedDestinationAssetFolder = NormalizeDestinationAssetFolder(DestinationAssetFolder);
+
+#if !WITH_EDITOR
+	if (!NormalizedDestinationAssetFolder.IsEmpty())
+	{
+		UE_LOG(LogT2A, Warning, TEXT("Requested import to Content folder '%s', but asset saving is only available in editor builds. Falling back to transient import."), *NormalizedDestinationAssetFolder);
+	}
+#endif
+
 	// Prevent garbage collection during async operation
 	AddToRoot();
 
 	// Parse FBX on background thread
-	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this, FilePath]()
+	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this, FilePath, NormalizedDestinationAssetFolder]()
 	{
 		FT2ASkeletonData SkeletonData;
 		FT2AAnimationData AnimData;
 		FString Error;
 
-		bool bSuccess = ParseFBXFile(FilePath, SkeletonData, AnimData, Error);
+		const bool bSuccess = ParseFBXFile(FilePath, SkeletonData, AnimData, Error);
+		if (bSuccess && AnimData.AnimationName.IsEmpty())
+		{
+			AnimData.AnimationName = FPaths::GetBaseFilename(FilePath);
+		}
+
+		const FString AssetBaseName = NormalizedDestinationAssetFolder.IsEmpty()
+			? FString()
+			: MakeImportedAssetBaseName(AnimData.AnimationName);
 
 		// Build UE objects on GameThread
-		AsyncTask(ENamedThreads::GameThread, [this, bSuccess, SkeletonData = MoveTemp(SkeletonData), AnimData = MoveTemp(AnimData), Error]()
+		AsyncTask(ENamedThreads::GameThread, [this, bSuccess, SkeletonData = MoveTemp(SkeletonData), AnimData = MoveTemp(AnimData), Error, NormalizedDestinationAssetFolder, AssetBaseName]()
 		{
 			RemoveFromRoot();
 
@@ -43,14 +150,14 @@ void URuntimeFBXImporter::ImportFBXAnimationAsync(const FString& FilePath)
 				return;
 			}
 
-			USkeleton* Skeleton = BuildSkeleton(SkeletonData);
+			USkeleton* Skeleton = BuildSkeleton(SkeletonData, NormalizedDestinationAssetFolder, AssetBaseName);
 			if (!Skeleton)
 			{
 				OnImportCompleted.Broadcast(nullptr, nullptr, TEXT("Failed to build skeleton"));
 				return;
 			}
 
-			UAnimSequence* AnimSequence = BuildAnimSequence(AnimData, Skeleton);
+			UAnimSequence* AnimSequence = BuildAnimSequence(AnimData, Skeleton, NormalizedDestinationAssetFolder, AssetBaseName);
 			if (!AnimSequence)
 			{
 				OnImportCompleted.Broadcast(nullptr, Skeleton, TEXT("Failed to build animation sequence"));
@@ -67,6 +174,20 @@ void URuntimeFBXImporter::ImportFBXAnimationAsync(const FString& FilePath)
 
 bool URuntimeFBXImporter::ImportFBXAnimation(const FString& FilePath, UAnimSequence*& OutAnimation, USkeleton*& OutSkeleton)
 {
+	return ImportFBXAnimationToFolder(FilePath, OutAnimation, OutSkeleton, FString());
+}
+
+bool URuntimeFBXImporter::ImportFBXAnimationToFolder(const FString& FilePath, UAnimSequence*& OutAnimation, USkeleton*& OutSkeleton, const FString& DestinationAssetFolder)
+{
+	const FString NormalizedDestinationAssetFolder = NormalizeDestinationAssetFolder(DestinationAssetFolder);
+
+#if !WITH_EDITOR
+	if (!NormalizedDestinationAssetFolder.IsEmpty())
+	{
+		UE_LOG(LogT2A, Warning, TEXT("Requested import to Content folder '%s', but asset saving is only available in editor builds. Falling back to transient import."), *NormalizedDestinationAssetFolder);
+	}
+#endif
+
 	FT2ASkeletonData SkeletonData;
 	FT2AAnimationData AnimData;
 	FString Error;
@@ -77,14 +198,23 @@ bool URuntimeFBXImporter::ImportFBXAnimation(const FString& FilePath, UAnimSeque
 		return false;
 	}
 
-	OutSkeleton = BuildSkeleton(SkeletonData);
+	if (AnimData.AnimationName.IsEmpty())
+	{
+		AnimData.AnimationName = FPaths::GetBaseFilename(FilePath);
+	}
+
+	const FString AssetBaseName = NormalizedDestinationAssetFolder.IsEmpty()
+		? FString()
+		: MakeImportedAssetBaseName(AnimData.AnimationName);
+
+	OutSkeleton = BuildSkeleton(SkeletonData, NormalizedDestinationAssetFolder, AssetBaseName);
 	if (!OutSkeleton)
 	{
 		UE_LOG(LogT2A, Error, TEXT("Failed to build skeleton from FBX"));
 		return false;
 	}
 
-	OutAnimation = BuildAnimSequence(AnimData, OutSkeleton);
+	OutAnimation = BuildAnimSequence(AnimData, OutSkeleton, NormalizedDestinationAssetFolder, AssetBaseName);
 	if (!OutAnimation)
 	{
 		UE_LOG(LogT2A, Error, TEXT("Failed to build animation from FBX"));
@@ -349,19 +479,37 @@ bool URuntimeFBXImporter::ParseFBXFile(const FString& FilePath, FT2ASkeletonData
 
 // ==================== Build UE Objects (GameThread) ====================
 
-USkeleton* URuntimeFBXImporter::BuildSkeleton(const FT2ASkeletonData& SkeletonData)
+USkeleton* URuntimeFBXImporter::BuildSkeleton(const FT2ASkeletonData& SkeletonData, const FString& DestinationAssetFolder, const FString& AssetBaseName)
 {
 	check(IsInGameThread());
 
-	if (SkeletonData.Bones.Num() == 0) return nullptr;
+	if (SkeletonData.Bones.Num() == 0)
+	{
+		return nullptr;
+	}
 
-	// Create transient USkeleton
-	USkeleton* Skeleton = NewObject<USkeleton>(GetTransientPackage(), NAME_None, RF_Transient);
-	
+	USkeleton* Skeleton = nullptr;
+	const bool bSaveToContent = !DestinationAssetFolder.IsEmpty();
+
+#if WITH_EDITOR
+	if (bSaveToContent)
+	{
+		const FString SafeAssetBaseName = AssetBaseName.IsEmpty() ? MakeImportedAssetBaseName(TEXT("ImportedAnimation")) : AssetBaseName;
+		const FString SkeletonAssetName = SanitizeAssetName(SafeAssetBaseName + TEXT("_Skeleton"), TEXT("ImportedSkeleton"));
+		const FString SkeletonPackageName = DestinationAssetFolder + TEXT("/") + SkeletonAssetName;
+		UPackage* SkeletonPackage = CreatePackage(*SkeletonPackageName);
+		Skeleton = NewObject<USkeleton>(SkeletonPackage, *SkeletonAssetName, RF_Public | RF_Standalone);
+	}
+	else
+#endif
+	{
+		Skeleton = NewObject<USkeleton>(GetTransientPackage(), NAME_None, RF_Transient);
+	}
+
 	// Set reference skeleton - use the merge path which is more robust across UE5 versions
 	// We need to create a temporary skeletal mesh to properly initialize the skeleton
 	USkeletalMesh* TempMesh = NewObject<USkeletalMesh>(GetTransientPackage(), NAME_None, RF_Transient);
-	
+
 	// Set the reference skeleton on the mesh's imported model
 	FReferenceSkeleton& MeshRefSkel = TempMesh->GetRefSkeleton();
 	{
@@ -375,28 +523,64 @@ USkeleton* URuntimeFBXImporter::BuildSkeleton(const FT2ASkeletonData& SkeletonDa
 			MeshModifier.Add(BoneInfo, Bone.LocalTransform);
 		}
 	}
-	
+
 	// Use MergeAllBonesToBoneTree to properly set up the skeleton
 	Skeleton->MergeAllBonesToBoneTree(TempMesh);
 
-	UE_LOG(LogT2A, Log, TEXT("Built transient skeleton with %d bones"), SkeletonData.Bones.Num());
+#if WITH_EDITOR
+	if (bSaveToContent)
+	{
+		if (SaveCreatedAsset(Skeleton))
+		{
+			UE_LOG(LogT2A, Log, TEXT("Built and saved skeleton asset: %s"), *Skeleton->GetPathName());
+		}
+		else
+		{
+			UE_LOG(LogT2A, Warning, TEXT("Built skeleton asset but failed to save package: %s"), *Skeleton->GetPathName());
+		}
+	}
+	else
+#endif
+	{
+		UE_LOG(LogT2A, Log, TEXT("Built transient skeleton with %d bones"), SkeletonData.Bones.Num());
+	}
+
 	return Skeleton;
 }
 
-UAnimSequence* URuntimeFBXImporter::BuildAnimSequence(const FT2AAnimationData& AnimData, USkeleton* Skeleton)
+UAnimSequence* URuntimeFBXImporter::BuildAnimSequence(const FT2AAnimationData& AnimData, USkeleton* Skeleton, const FString& DestinationAssetFolder, const FString& AssetBaseName)
 {
 	check(IsInGameThread());
 
-	if (!Skeleton || AnimData.NumFrames == 0) return nullptr;
+	if (!Skeleton || AnimData.NumFrames == 0)
+	{
+		return nullptr;
+	}
 
-	UAnimSequence* AnimSequence = NewObject<UAnimSequence>(GetTransientPackage(), NAME_None, RF_Transient);
+	UAnimSequence* AnimSequence = nullptr;
+	const bool bSaveToContent = !DestinationAssetFolder.IsEmpty();
+
+#if WITH_EDITOR
+	if (bSaveToContent)
+	{
+		const FString SafeAssetBaseName = AssetBaseName.IsEmpty() ? MakeImportedAssetBaseName(AnimData.AnimationName) : AssetBaseName;
+		const FString AnimAssetName = SanitizeAssetName(SafeAssetBaseName, TEXT("ImportedAnimation"));
+		const FString AnimPackageName = DestinationAssetFolder + TEXT("/") + AnimAssetName;
+		UPackage* AnimPackage = CreatePackage(*AnimPackageName);
+		AnimSequence = NewObject<UAnimSequence>(AnimPackage, *AnimAssetName, RF_Public | RF_Standalone);
+	}
+	else
+#endif
+	{
+		AnimSequence = NewObject<UAnimSequence>(GetTransientPackage(), NAME_None, RF_Transient);
+	}
+
 	AnimSequence->SetSkeleton(Skeleton);
 
 	// Use IAnimationDataController (UE 5.2+)
 	IAnimationDataController& Controller = AnimSequence->GetController();
-	
+
 	Controller.OpenBracket(FText::FromString(TEXT("RuntimeFBXImport")), false);
-	
 	Controller.SetFrameRate(FFrameRate(FMath::RoundToInt(AnimData.FrameRate), 1), false);
 	Controller.SetNumberOfFrames(FFrameNumber(AnimData.NumFrames - 1), false);
 
@@ -405,13 +589,15 @@ UAnimSequence* URuntimeFBXImporter::BuildAnimSequence(const FT2AAnimationData& A
 	for (int32 TrackIdx = 0; TrackIdx < AnimData.BoneTracks.Num(); TrackIdx++)
 	{
 		const FT2ABoneKeyframeData& Track = AnimData.BoneTracks[TrackIdx];
-		
-		if (Track.Positions.Num() == 0) continue;
+		if (Track.Positions.Num() == 0)
+		{
+			continue;
+		}
 
-		FName BoneName(*Track.BoneName);
-		
+		const FName BoneName(*Track.BoneName);
+
 		// Verify bone exists in skeleton
-		int32 BoneIndex = RefSkeleton.FindBoneIndex(BoneName);
+		const int32 BoneIndex = RefSkeleton.FindBoneIndex(BoneName);
 		if (BoneIndex == INDEX_NONE)
 		{
 			UE_LOG(LogT2A, Warning, TEXT("Bone '%s' not found in skeleton, skipping"), *Track.BoneName);
@@ -431,8 +617,24 @@ UAnimSequence* URuntimeFBXImporter::BuildAnimSequence(const FT2AAnimationData& A
 
 	Controller.CloseBracket(false);
 
-	UE_LOG(LogT2A, Log, TEXT("Built transient AnimSequence: %s (%.2fs, %d tracks)"),
-		*AnimData.AnimationName, AnimData.Duration, AnimData.BoneTracks.Num());
+#if WITH_EDITOR
+	if (bSaveToContent)
+	{
+		if (SaveCreatedAsset(AnimSequence))
+		{
+			UE_LOG(LogT2A, Log, TEXT("Built and saved AnimSequence asset: %s"), *AnimSequence->GetPathName());
+		}
+		else
+		{
+			UE_LOG(LogT2A, Warning, TEXT("Built AnimSequence asset but failed to save package: %s"), *AnimSequence->GetPathName());
+		}
+	}
+	else
+#endif
+	{
+		UE_LOG(LogT2A, Log, TEXT("Built transient AnimSequence: %s (%.2fs, %d tracks)"),
+			*AnimData.AnimationName, AnimData.Duration, AnimData.BoneTracks.Num());
+	}
 
 	return AnimSequence;
 }

@@ -107,8 +107,12 @@ private:
 	bool bIsPolling = false;
 	FString CurrentPollingTaskId;
 	int32 PollCount = 0;
+	int32 SuccessWithoutFilesCount = 0;
 	double PollingStartTime = 0.0;
+	double SuccessWithoutFilesStartTime = 0.0;
 	static constexpr int32 MaxPollCount = 500; // ~991s max with current polling schedule
+	static constexpr int32 MaxSuccessWithoutFilesPolls = 30;
+	static constexpr double MaxSuccessWithoutFilesWaitSeconds = 60.0;
 	static constexpr float FirstPollDelay = 2.0f;
 	static constexpr float FastPollWindowStart = 5.0f;
 	static constexpr float FastPollWindowEnd = 15.0f;

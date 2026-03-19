@@ -71,6 +71,11 @@ void UT2AAnimationSubsystem::RunPipeline(const FT2APipelineConfig& Config)
 	CurrentRewrittenPrompt.Empty();
 	LastCompletionSummary.Empty();
 
+	if (CurrentConfig.bSaveImportedAssetsToContent && CurrentConfig.OutputAssetFolder.IsEmpty())
+	{
+		CurrentConfig.OutputAssetFolder = TEXT("/Game/HunyuanMotion/Imported");
+	}
+
 	if (!CurrentConfig.LocalFBXFilePath.IsEmpty())
 	{
 		CurrentConfig.LocalFBXFilePath = FPaths::ConvertRelativePathToFull(CurrentConfig.LocalFBXFilePath);
@@ -219,8 +224,20 @@ void UT2AAnimationSubsystem::OnDownloadComplete(const FString& LocalFilePath, co
 void UT2AAnimationSubsystem::StartImporting(const FString& LocalFilePath)
 {
 	CurrentStage = ET2APipelineStage::Importing;
-	OnPipelineProgress.Broadcast(CurrentStage, 0.65f, TEXT("Importing animation from FBX..."));
-	OnPipelineProgressNative.Broadcast(CurrentStage, 0.65f, TEXT("Importing animation from FBX..."));
+
+	const bool bSaveToContent = CurrentConfig.bSaveImportedAssetsToContent && !CurrentConfig.OutputAssetFolder.IsEmpty();
+	const FString ImportStatus = bSaveToContent
+		? FString::Printf(TEXT("Importing animation from FBX to %s..."), *CurrentConfig.OutputAssetFolder)
+		: TEXT("Importing animation from FBX...");
+
+	OnPipelineProgress.Broadcast(CurrentStage, 0.65f, ImportStatus);
+	OnPipelineProgressNative.Broadcast(CurrentStage, 0.65f, ImportStatus);
+
+	if (bSaveToContent)
+	{
+		Importer->ImportFBXAnimationAsyncToFolder(LocalFilePath, CurrentConfig.OutputAssetFolder);
+		return;
+	}
 
 	Importer->ImportFBXAnimationAsync(LocalFilePath);
 }
@@ -236,9 +253,26 @@ void UT2AAnimationSubsystem::OnImportComplete(UAnimSequence* Animation, USkeleto
 	}
 
 	UE_LOG(LogT2A, Log, TEXT("Animation imported successfully"));
-	LastCompletionSummary = CurrentConfig.LocalFBXFilePath.IsEmpty()
-		? TEXT("Done! Animation generated, downloaded, and imported successfully.")
-		: TEXT("Done! Local FBX imported successfully.");
+
+	const bool bSavedToContent = Animation->GetPathName().StartsWith(TEXT("/Game/"));
+	if (bSavedToContent)
+	{
+		LastCompletionSummary = CurrentConfig.LocalFBXFilePath.IsEmpty()
+			? FString::Printf(TEXT("Done! Animation generated and imported to %s"), *Animation->GetPathName())
+			: FString::Printf(TEXT("Done! Local FBX imported to %s"), *Animation->GetPathName());
+	}
+	else if (CurrentConfig.bSaveImportedAssetsToContent)
+	{
+		LastCompletionSummary = CurrentConfig.LocalFBXFilePath.IsEmpty()
+			? TEXT("Done! Animation imported successfully, but asset save was unavailable so a transient object was returned.")
+			: TEXT("Done! Local FBX imported successfully, but asset save was unavailable so a transient object was returned.");
+	}
+	else
+	{
+		LastCompletionSummary = CurrentConfig.LocalFBXFilePath.IsEmpty()
+			? TEXT("Done! Animation generated, downloaded, and imported successfully.")
+			: TEXT("Done! Local FBX imported successfully.");
+	}
 
 	const FString CompletionPrompt = CurrentRewrittenPrompt.IsEmpty() ? CurrentConfig.TextPrompt : CurrentRewrittenPrompt;
 	FinishPipeline(Animation, CompletionPrompt);

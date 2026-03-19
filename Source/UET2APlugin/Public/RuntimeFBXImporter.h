@@ -58,9 +58,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "T2A|Import")
 	void ImportFBXAnimationAsync(const FString& FilePath);
 
+	/** Internal variant that optionally persists imported assets into a Content folder when running in editor. */
+	void ImportFBXAnimationAsyncToFolder(const FString& FilePath, const FString& DestinationAssetFolder);
+
 	/** Import FBX animation synchronously (blocks GameThread - use for small files only) */
 	UFUNCTION(BlueprintCallable, Category = "T2A|Import")
 	bool ImportFBXAnimation(const FString& FilePath, UAnimSequence*& OutAnimation, USkeleton*& OutSkeleton);
+
+	/** Internal variant that optionally persists imported assets into a Content folder when running in editor. */
+	bool ImportFBXAnimationToFolder(const FString& FilePath, UAnimSequence*& OutAnimation, USkeleton*& OutSkeleton, const FString& DestinationAssetFolder);
 
 	/** Fired when async import completes */
 	UPROPERTY(BlueprintAssignable, Category = "T2A|Import")
@@ -71,8 +77,8 @@ private:
 	static bool ParseFBXFile(const FString& FilePath, FT2ASkeletonData& OutSkeleton, FT2AAnimationData& OutAnimation, FString& OutError);
 
 	// GameThread: Build UE objects from parsed data
-	static USkeleton* BuildSkeleton(const FT2ASkeletonData& SkeletonData);
-	static UAnimSequence* BuildAnimSequence(const FT2AAnimationData& AnimData, USkeleton* Skeleton);
+	static USkeleton* BuildSkeleton(const FT2ASkeletonData& SkeletonData, const FString& DestinationAssetFolder, const FString& AssetBaseName);
+	static UAnimSequence* BuildAnimSequence(const FT2AAnimationData& AnimData, USkeleton* Skeleton, const FString& DestinationAssetFolder, const FString& AssetBaseName);
 
 #if WITH_FBX_SDK
 	// FBX SDK helpers

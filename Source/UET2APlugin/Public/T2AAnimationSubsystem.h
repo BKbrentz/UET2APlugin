@@ -46,6 +46,12 @@ struct FT2APipelineConfig
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "T2A")
 	FString LocalFBXFilePath;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "T2A")
+	bool bSaveImportedAssetsToContent = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "T2A")
+	FString OutputAssetFolder = TEXT("/Game/HunyuanMotion/Imported");
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnPipelineProgress, ET2APipelineStage, Stage, float, Progress, const FString&, StatusMessage);
