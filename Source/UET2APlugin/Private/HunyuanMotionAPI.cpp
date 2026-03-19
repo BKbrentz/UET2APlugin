@@ -36,8 +36,7 @@ namespace
 			TEXT("download_url"),
 			TEXT("output_url"),
 			TEXT("cos_url"),
-			TEXT("fbx_url"),
-			TEXT("retarget_fbx_url")
+			TEXT("fbx_url")
 		};
 
 		for (const TCHAR* FieldName : CandidateFields)
@@ -217,7 +216,6 @@ FHunyuanMotionResult UHunyuanMotionAPI::ParseMotionResult(TSharedPtr<FJsonObject
 						(*EntryObj)->TryGetStringField(TEXT("type"), Entry.Type);
 
 						AppendFileUrlsFromArrayField(*EntryObj, TEXT("fbx_files"), Entry.Files);
-						AppendFileUrlsFromArrayField(*EntryObj, TEXT("retarget_fbx_files"), Entry.Files);
 						AppendFileUrlsFromArrayField(*EntryObj, TEXT("files"), Entry.Files);
 						AppendDirectFileUrlFields(*EntryObj, Entry.Files);
 						Result.MotionEntries.Add(Entry);

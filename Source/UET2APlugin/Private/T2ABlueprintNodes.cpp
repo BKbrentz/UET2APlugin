@@ -11,13 +11,15 @@
 UGenerateAndApplyMotionAsync* UGenerateAndApplyMotionAsync::GenerateMotionFromText(
 	UObject* WorldContextObject,
 	const FString& TextPrompt,
-	int32 Duration)
+	int32 Duration,
+	USkeletalMesh* TargetSkeletalMesh)
 {
 	UGenerateAndApplyMotionAsync* Node = NewObject<UGenerateAndApplyMotionAsync>();
 	Node->WorldContext = WorldContextObject;
 
 	Node->PipelineConfig.TextPrompt = TextPrompt;
 	Node->PipelineConfig.Duration = FMath::Clamp(Duration, 1, 12);
+	Node->PipelineConfig.TargetSkeletalMesh = TargetSkeletalMesh;
 
 	Node->RegisterWithGameInstance(WorldContextObject);
 

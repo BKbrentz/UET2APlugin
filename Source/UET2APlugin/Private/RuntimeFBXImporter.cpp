@@ -73,6 +73,51 @@ FString MakeImportedAssetBaseName(const FString& InName)
 	return FString::Printf(TEXT("%s_%s"), *BaseName, *UniqueSuffix);
 }
 
+bool ValidateTargetSkeletonCompatibility(const FT2ASkeletonData& SkeletonData, USkeleton* TargetSkeleton, FString& OutError)
+{
+	if (!TargetSkeleton)
+	{
+		OutError = TEXT("Target skeletal mesh is missing a valid skeleton");
+		return false;
+	}
+
+	if (SkeletonData.Bones.Num() == 0)
+	{
+		OutError = TEXT("Imported FBX does not contain any bones");
+		return false;
+	}
+
+	const FReferenceSkeleton& ReferenceSkeleton = TargetSkeleton->GetReferenceSkeleton();
+	const FString RootBoneName = SkeletonData.Bones[0].Name;
+	if (ReferenceSkeleton.FindBoneIndex(FName(*RootBoneName)) == INDEX_NONE)
+	{
+		OutError = FString::Printf(TEXT("Target skeleton '%s' is missing FBX root bone '%s'"), *TargetSkeleton->GetPathName(), *RootBoneName);
+		return false;
+	}
+
+	int32 MatchedBoneCount = 0;
+	for (const FT2ASkeletonData::FBoneInfo& Bone : SkeletonData.Bones)
+	{
+		if (ReferenceSkeleton.FindBoneIndex(FName(*Bone.Name)) != INDEX_NONE)
+		{
+			++MatchedBoneCount;
+		}
+	}
+
+	if (MatchedBoneCount == 0)
+	{
+		OutError = FString::Printf(TEXT("Target skeleton '%s' does not share any bone names with the imported FBX"), *TargetSkeleton->GetPathName());
+		return false;
+	}
+
+	if (MatchedBoneCount != SkeletonData.Bones.Num())
+	{
+		UE_LOG(LogT2A, Warning, TEXT("Target skeleton '%s' matches %d/%d imported FBX bones. Missing tracks will be skipped."), *TargetSkeleton->GetPathName(), MatchedBoneCount, SkeletonData.Bones.Num());
+	}
+
+	return true;
+}
+
 #if WITH_EDITOR
 bool SaveCreatedAsset(UObject* Asset)
 {
@@ -102,14 +147,15 @@ bool SaveCreatedAsset(UObject* Asset)
 
 // ==================== Async Import ====================
 
-void URuntimeFBXImporter::ImportFBXAnimationAsync(const FString& FilePath)
+void URuntimeFBXImporter::ImportFBXAnimationAsync(const FString& FilePath, USkeletalMesh* TargetSkeletalMesh)
 {
-	ImportFBXAnimationAsyncToFolder(FilePath, FString());
+	ImportFBXAnimationAsyncToFolder(FilePath, FString(), TargetSkeletalMesh);
 }
 
-void URuntimeFBXImporter::ImportFBXAnimationAsyncToFolder(const FString& FilePath, const FString& DestinationAssetFolder)
+void URuntimeFBXImporter::ImportFBXAnimationAsyncToFolder(const FString& FilePath, const FString& DestinationAssetFolder, USkeletalMesh* TargetSkeletalMesh)
 {
 	const FString NormalizedDestinationAssetFolder = NormalizeDestinationAssetFolder(DestinationAssetFolder);
+	const TWeakObjectPtr<USkeletalMesh> WeakTargetSkeletalMesh = TargetSkeletalMesh;
 
 #if !WITH_EDITOR
 	if (!NormalizedDestinationAssetFolder.IsEmpty())
@@ -122,7 +168,7 @@ void URuntimeFBXImporter::ImportFBXAnimationAsyncToFolder(const FString& FilePat
 	AddToRoot();
 
 	// Parse FBX on background thread
-	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this, FilePath, NormalizedDestinationAssetFolder]()
+	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this, FilePath, NormalizedDestinationAssetFolder, WeakTargetSkeletalMesh]()
 	{
 		FT2ASkeletonData SkeletonData;
 		FT2AAnimationData AnimData;
@@ -139,7 +185,7 @@ void URuntimeFBXImporter::ImportFBXAnimationAsyncToFolder(const FString& FilePat
 			: MakeImportedAssetBaseName(AnimData.AnimationName);
 
 		// Build UE objects on GameThread
-		AsyncTask(ENamedThreads::GameThread, [this, bSuccess, SkeletonData = MoveTemp(SkeletonData), AnimData = MoveTemp(AnimData), Error, NormalizedDestinationAssetFolder, AssetBaseName]()
+		AsyncTask(ENamedThreads::GameThread, [this, bSuccess, SkeletonData = MoveTemp(SkeletonData), AnimData = MoveTemp(AnimData), Error, NormalizedDestinationAssetFolder, AssetBaseName, WeakTargetSkeletalMesh]()
 		{
 			RemoveFromRoot();
 
@@ -150,11 +196,29 @@ void URuntimeFBXImporter::ImportFBXAnimationAsyncToFolder(const FString& FilePat
 				return;
 			}
 
-			USkeleton* Skeleton = BuildSkeleton(SkeletonData, NormalizedDestinationAssetFolder, AssetBaseName);
-			if (!Skeleton)
+			USkeleton* Skeleton = nullptr;
+			if (USkeletalMesh* ResolvedTargetSkeletalMesh = WeakTargetSkeletalMesh.Get())
 			{
-				OnImportCompleted.Broadcast(nullptr, nullptr, TEXT("Failed to build skeleton"));
-				return;
+				Skeleton = ResolvedTargetSkeletalMesh->GetSkeleton();
+				FString CompatibilityError;
+				if (!ValidateTargetSkeletonCompatibility(SkeletonData, Skeleton, CompatibilityError))
+				{
+					UE_LOG(LogT2A, Error, TEXT("FBX import failed: %s"), *CompatibilityError);
+					OnImportCompleted.Broadcast(nullptr, Skeleton, CompatibilityError);
+					return;
+				}
+
+				UE_LOG(LogT2A, Log, TEXT("Reusing target skeletal mesh '%s' with skeleton '%s' for imported animation"),
+					*ResolvedTargetSkeletalMesh->GetPathName(), *Skeleton->GetPathName());
+			}
+			else
+			{
+				Skeleton = BuildSkeleton(SkeletonData, NormalizedDestinationAssetFolder, AssetBaseName);
+				if (!Skeleton)
+				{
+					OnImportCompleted.Broadcast(nullptr, nullptr, TEXT("Failed to build skeleton"));
+					return;
+				}
 			}
 
 			UAnimSequence* AnimSequence = BuildAnimSequence(AnimData, Skeleton, NormalizedDestinationAssetFolder, AssetBaseName);
@@ -172,12 +236,12 @@ void URuntimeFBXImporter::ImportFBXAnimationAsyncToFolder(const FString& FilePat
 	});
 }
 
-bool URuntimeFBXImporter::ImportFBXAnimation(const FString& FilePath, UAnimSequence*& OutAnimation, USkeleton*& OutSkeleton)
+bool URuntimeFBXImporter::ImportFBXAnimation(const FString& FilePath, UAnimSequence*& OutAnimation, USkeleton*& OutSkeleton, USkeletalMesh* TargetSkeletalMesh)
 {
-	return ImportFBXAnimationToFolder(FilePath, OutAnimation, OutSkeleton, FString());
+	return ImportFBXAnimationToFolder(FilePath, OutAnimation, OutSkeleton, FString(), TargetSkeletalMesh);
 }
 
-bool URuntimeFBXImporter::ImportFBXAnimationToFolder(const FString& FilePath, UAnimSequence*& OutAnimation, USkeleton*& OutSkeleton, const FString& DestinationAssetFolder)
+bool URuntimeFBXImporter::ImportFBXAnimationToFolder(const FString& FilePath, UAnimSequence*& OutAnimation, USkeleton*& OutSkeleton, const FString& DestinationAssetFolder, USkeletalMesh* TargetSkeletalMesh)
 {
 	const FString NormalizedDestinationAssetFolder = NormalizeDestinationAssetFolder(DestinationAssetFolder);
 
@@ -207,11 +271,27 @@ bool URuntimeFBXImporter::ImportFBXAnimationToFolder(const FString& FilePath, UA
 		? FString()
 		: MakeImportedAssetBaseName(AnimData.AnimationName);
 
-	OutSkeleton = BuildSkeleton(SkeletonData, NormalizedDestinationAssetFolder, AssetBaseName);
-	if (!OutSkeleton)
+	if (TargetSkeletalMesh)
 	{
-		UE_LOG(LogT2A, Error, TEXT("Failed to build skeleton from FBX"));
-		return false;
+		OutSkeleton = TargetSkeletalMesh->GetSkeleton();
+		FString CompatibilityError;
+		if (!ValidateTargetSkeletonCompatibility(SkeletonData, OutSkeleton, CompatibilityError))
+		{
+			UE_LOG(LogT2A, Error, TEXT("FBX import failed: %s"), *CompatibilityError);
+			return false;
+		}
+
+		UE_LOG(LogT2A, Log, TEXT("Reusing target skeletal mesh '%s' with skeleton '%s' for imported animation"),
+			*TargetSkeletalMesh->GetPathName(), *OutSkeleton->GetPathName());
+	}
+	else
+	{
+		OutSkeleton = BuildSkeleton(SkeletonData, NormalizedDestinationAssetFolder, AssetBaseName);
+		if (!OutSkeleton)
+		{
+			UE_LOG(LogT2A, Error, TEXT("Failed to build skeleton from FBX"));
+			return false;
+		}
 	}
 
 	OutAnimation = BuildAnimSequence(AnimData, OutSkeleton, NormalizedDestinationAssetFolder, AssetBaseName);
@@ -577,12 +657,20 @@ UAnimSequence* URuntimeFBXImporter::BuildAnimSequence(const FT2AAnimationData& A
 
 	AnimSequence->SetSkeleton(Skeleton);
 
-	// Use IAnimationDataController (UE 5.2+)
-	IAnimationDataController& Controller = AnimSequence->GetController();
+	// Use IAnimationDataController (UE 5.2+) and explicitly initialize the data model.
+	// Freshly created transient AnimSequences can otherwise hit SequencerDataModel validation
+	// paths before the internal MovieScene exists, which produces
+	// "No Movie Scene found for SequencerDataModel".
+	const int32 SafeFrameRate = FMath::Max(FMath::RoundToInt(AnimData.FrameRate), 1);
+	const float SafePlayLength = FMath::Max(AnimData.Duration, 1.0f / static_cast<float>(SafeFrameRate));
+	AnimSequence->ImportFileFramerate = static_cast<float>(SafeFrameRate);
+	AnimSequence->ImportResampleFramerate = SafeFrameRate;
 
+	IAnimationDataController& Controller = AnimSequence->GetController();
 	Controller.OpenBracket(FText::FromString(TEXT("RuntimeFBXImport")), false);
-	Controller.SetFrameRate(FFrameRate(FMath::RoundToInt(AnimData.FrameRate), 1), false);
-	Controller.SetNumberOfFrames(FFrameNumber(AnimData.NumFrames - 1), false);
+	Controller.InitializeModel();
+	Controller.SetFrameRate(FFrameRate(SafeFrameRate, 1), false);
+	Controller.SetPlayLength(SafePlayLength, false);
 
 	const FReferenceSkeleton& RefSkeleton = Skeleton->GetReferenceSkeleton();
 
@@ -604,18 +692,26 @@ UAnimSequence* URuntimeFBXImporter::BuildAnimSequence(const FT2AAnimationData& A
 			continue;
 		}
 
-		// Add bone track
-		Controller.AddBoneCurve(BoneName, false);
+		if (!Controller.AddBoneCurve(BoneName, false))
+		{
+			UE_LOG(LogT2A, Warning, TEXT("Failed to add bone animation track for '%s', skipping"), *Track.BoneName);
+			continue;
+		}
 
 		// Build transform keys - convert FVector/FQuat to what the controller expects
 		TArray<FVector> PosKeys = Track.Positions;
 		TArray<FQuat> RotKeys = Track.Rotations;
 		TArray<FVector> ScaleKeys = Track.Scales;
 
-		Controller.SetBoneTrackKeys(BoneName, PosKeys, RotKeys, ScaleKeys, false);
+		if (!Controller.SetBoneTrackKeys(BoneName, PosKeys, RotKeys, ScaleKeys, false))
+		{
+			UE_LOG(LogT2A, Warning, TEXT("Failed to set bone track keys for '%s'"), *Track.BoneName);
+		}
 	}
 
+	Controller.NotifyPopulated();
 	Controller.CloseBracket(false);
+	AnimSequence->WaitOnExistingCompression();
 
 #if WITH_EDITOR
 	if (bSaveToContent)

@@ -6,6 +6,8 @@
 #include "Animation/AnimSequence.h"
 #include "RuntimeFBXImporter.generated.h"
 
+class USkeletalMesh;
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnFBXImportCompleted, UAnimSequence*, Animation, USkeleton*, Skeleton, const FString&, ErrorMsg);
 
 /** Intermediate bone keyframe data extracted from FBX (non-UObject, thread-safe) */
@@ -54,19 +56,19 @@ class UET2APLUGIN_API URuntimeFBXImporter : public UObject
 	GENERATED_BODY()
 
 public:
-	/** Import FBX animation asynchronously (recommended) */
+	/** Import FBX animation asynchronously (recommended). Reuses the provided SkeletalMesh's Skeleton when available. */
 	UFUNCTION(BlueprintCallable, Category = "T2A|Import")
-	void ImportFBXAnimationAsync(const FString& FilePath);
+	void ImportFBXAnimationAsync(const FString& FilePath, USkeletalMesh* TargetSkeletalMesh = nullptr);
 
 	/** Internal variant that optionally persists imported assets into a Content folder when running in editor. */
-	void ImportFBXAnimationAsyncToFolder(const FString& FilePath, const FString& DestinationAssetFolder);
+	void ImportFBXAnimationAsyncToFolder(const FString& FilePath, const FString& DestinationAssetFolder, USkeletalMesh* TargetSkeletalMesh = nullptr);
 
-	/** Import FBX animation synchronously (blocks GameThread - use for small files only) */
+	/** Import FBX animation synchronously (blocks GameThread - use for small files only). Reuses the provided SkeletalMesh's Skeleton when available. */
 	UFUNCTION(BlueprintCallable, Category = "T2A|Import")
-	bool ImportFBXAnimation(const FString& FilePath, UAnimSequence*& OutAnimation, USkeleton*& OutSkeleton);
+	bool ImportFBXAnimation(const FString& FilePath, UAnimSequence*& OutAnimation, USkeleton*& OutSkeleton, USkeletalMesh* TargetSkeletalMesh = nullptr);
 
 	/** Internal variant that optionally persists imported assets into a Content folder when running in editor. */
-	bool ImportFBXAnimationToFolder(const FString& FilePath, UAnimSequence*& OutAnimation, USkeleton*& OutSkeleton, const FString& DestinationAssetFolder);
+	bool ImportFBXAnimationToFolder(const FString& FilePath, UAnimSequence*& OutAnimation, USkeleton*& OutSkeleton, const FString& DestinationAssetFolder, USkeletalMesh* TargetSkeletalMesh = nullptr);
 
 	/** Fired when async import completes */
 	UPROPERTY(BlueprintAssignable, Category = "T2A|Import")

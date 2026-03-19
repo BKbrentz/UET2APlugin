@@ -7,6 +7,8 @@
 #include "T2AAnimationSubsystem.h"
 #include "T2ABlueprintNodes.generated.h"
 
+class USkeletalMesh;
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_SixParams(FOnMotionGenEvent, ET2APipelineStage, Stage, float, Percent, const FString&, StatusMessage, UAnimSequence*, ImportedAnimation, const FString&, RewrittenPrompt, const FString&, ErrorMessage);
 
 /**
@@ -15,8 +17,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_SixParams(FOnMotionGenEvent, ET2APipelineStag
  * One node does the streamlined pipeline:
  * Text Prompt → Hunyuan API → Download FBX → Import
  *
- * The underlying class name is kept for backward compatibility, but the node no
- * longer performs auto-retargeting or auto-play.
+ * The underlying class name is kept for backward compatibility, but the node now
+ * runs the generate → download → import flow and leaves playback to the caller.
  */
 UCLASS(meta=(BlueprintInternalUseOnly="true"))
 class UET2APLUGIN_API UGenerateAndApplyMotionAsync : public UBlueprintAsyncActionBase
@@ -30,12 +32,14 @@ public:
 	 * @param WorldContextObject  World context
 	 * @param TextPrompt          Text description of the desired animation
 	 * @param Duration            Animation duration in seconds (1-12)
+	 * @param TargetSkeletalMesh  Optional SkeletalMesh whose Skeleton will be reused during import
 	 */
 	UFUNCTION(BlueprintCallable, meta=(BlueprintInternalUseOnly="true", WorldContext="WorldContextObject", DisplayName="Generate Motion from Text"), Category="T2A")
 	static UGenerateAndApplyMotionAsync* GenerateMotionFromText(
 		UObject* WorldContextObject,
 		const FString& TextPrompt,
-		int32 Duration = 5);
+		int32 Duration = 5,
+		USkeletalMesh* TargetSkeletalMesh = nullptr);
 
 	// ==================== Output Pins ====================
 

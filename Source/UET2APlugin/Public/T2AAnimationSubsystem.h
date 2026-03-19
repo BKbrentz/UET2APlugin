@@ -12,6 +12,7 @@ class UFBXDownloader;
 class URuntimeFBXImporter;
 class UAnimSequence;
 class USkeleton;
+class USkeletalMesh;
 
 /** Pipeline stage enumeration */
 UENUM(BlueprintType)
@@ -46,6 +47,9 @@ struct FT2APipelineConfig
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "T2A")
 	FString LocalFBXFilePath;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "T2A")
+	USkeletalMesh* TargetSkeletalMesh = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "T2A")
 	bool bSaveImportedAssetsToContent = true;

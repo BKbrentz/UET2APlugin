@@ -190,7 +190,7 @@ TSharedRef<SWidget> ST2AEditorPanel::BuildLocalFBXSection()
 		.Padding(0, 2, 0, 0)
 		[
 			SNew(STextBlock)
-			.Text(LOCTEXT("LocalFBXNote", "If a local FBX is set, the panel skips API generation/download and directly imports this file into the existing retarget flow."))
+			.Text(LOCTEXT("LocalFBXNote", "If a local FBX is set, the panel skips API generation/download and directly imports this file through the current FBX import flow."))
 			.AutoWrapText(true)
 			.ColorAndOpacity(FSlateColor(FLinearColor(0.65f, 0.65f, 0.65f)))
 		]

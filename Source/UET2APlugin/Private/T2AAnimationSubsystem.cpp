@@ -6,6 +6,7 @@
 #include "FBXDownloader.h"
 #include "RuntimeFBXImporter.h"
 #include "Animation/AnimSequence.h"
+#include "Engine/SkeletalMesh.h"
 #include "Misc/Paths.h"
 
 // ==================== Lifecycle ====================
@@ -233,13 +234,18 @@ void UT2AAnimationSubsystem::StartImporting(const FString& LocalFilePath)
 	OnPipelineProgress.Broadcast(CurrentStage, 0.65f, ImportStatus);
 	OnPipelineProgressNative.Broadcast(CurrentStage, 0.65f, ImportStatus);
 
+	if (CurrentConfig.TargetSkeletalMesh)
+	{
+		UE_LOG(LogT2A, Log, TEXT("Import will reuse target skeletal mesh: %s"), *CurrentConfig.TargetSkeletalMesh->GetPathName());
+	}
+
 	if (bSaveToContent)
 	{
-		Importer->ImportFBXAnimationAsyncToFolder(LocalFilePath, CurrentConfig.OutputAssetFolder);
+		Importer->ImportFBXAnimationAsyncToFolder(LocalFilePath, CurrentConfig.OutputAssetFolder, CurrentConfig.TargetSkeletalMesh);
 		return;
 	}
 
-	Importer->ImportFBXAnimationAsync(LocalFilePath);
+	Importer->ImportFBXAnimationAsync(LocalFilePath, CurrentConfig.TargetSkeletalMesh);
 }
 
 void UT2AAnimationSubsystem::OnImportComplete(UAnimSequence* Animation, USkeleton* Skeleton, const FString& ErrorMsg)
