@@ -137,6 +137,7 @@ void UT2AAnimationSubsystem::StartSubmitting()
 	Request.Duration = CurrentConfig.Duration;
 	Request.bMesh = CurrentConfig.bMesh;
 	Request.bDisableRewrite = CurrentConfig.bDisableRewrite;
+	Request.bDisableDurationEstimate = true;
 
 	API->SubmitMotionTask(Request);
 }

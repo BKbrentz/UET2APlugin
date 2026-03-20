@@ -24,7 +24,8 @@ public class UET2APluginEditor : ModuleRules
 			"InputCore",
 			"ToolMenus",
 			"WorkspaceMenuStructure",
-			"DesktopPlatform"
+			"DesktopPlatform",
+			"ApplicationCore"
 		});
 	}
 }

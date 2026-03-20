@@ -2,9 +2,11 @@
 
 #include "RuntimeFBXImporter.h"
 #include "UET2APlugin.h"
+#include "Animation/AnimData/IAnimationDataController.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/Skeleton.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "ReferenceSkeleton.h"
 #include "Async/Async.h"
 #include "Engine/SkeletalMesh.h"
 #include "Misc/Guid.h"
@@ -38,7 +40,7 @@ FString NormalizeDestinationAssetFolder(const FString& DestinationAssetFolder)
 
 	while (NormalizedFolder.Len() > 5 && NormalizedFolder.EndsWith(TEXT("/")))
 	{
-		NormalizedFolder.LeftChopInline(1, false);
+		NormalizedFolder.LeftChopInline(1, EAllowShrinking::No);
 	}
 
 	return NormalizedFolder;
@@ -662,15 +664,18 @@ UAnimSequence* URuntimeFBXImporter::BuildAnimSequence(const FT2AAnimationData& A
 	// paths before the internal MovieScene exists, which produces
 	// "No Movie Scene found for SequencerDataModel".
 	const int32 SafeFrameRate = FMath::Max(FMath::RoundToInt(AnimData.FrameRate), 1);
-	const float SafePlayLength = FMath::Max(AnimData.Duration, 1.0f / static_cast<float>(SafeFrameRate));
+	const int32 SafeNumberOfFrames = FMath::Max(AnimData.NumFrames, 1);
+
+#if WITH_EDITORONLY_DATA
 	AnimSequence->ImportFileFramerate = static_cast<float>(SafeFrameRate);
 	AnimSequence->ImportResampleFramerate = SafeFrameRate;
+#endif
 
 	IAnimationDataController& Controller = AnimSequence->GetController();
 	Controller.OpenBracket(FText::FromString(TEXT("RuntimeFBXImport")), false);
 	Controller.InitializeModel();
 	Controller.SetFrameRate(FFrameRate(SafeFrameRate, 1), false);
-	Controller.SetPlayLength(SafePlayLength, false);
+	Controller.SetNumberOfFrames(FFrameNumber(SafeNumberOfFrames), false);
 
 	const FReferenceSkeleton& RefSkeleton = Skeleton->GetReferenceSkeleton();
 

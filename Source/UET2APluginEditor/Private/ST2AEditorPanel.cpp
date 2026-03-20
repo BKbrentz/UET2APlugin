@@ -18,6 +18,7 @@
 #include "IDesktopPlatform.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Misc/Paths.h"
+#include "Styling/CoreStyle.h"
 
 #define LOCTEXT_NAMESPACE "ST2AEditorPanel"
 

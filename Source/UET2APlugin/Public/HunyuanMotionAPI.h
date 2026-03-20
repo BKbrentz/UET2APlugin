@@ -3,8 +3,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Ticker.h"
 #include "HunyuanMotionTypes.h"
 #include "HunyuanMotionAPI.generated.h"
+
+class FJsonObject;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnMotionTaskSubmitted, const FString&, TaskId, const FString&, ErrorMsg);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnMotionTaskCompleted, const FHunyuanMotionResult&, Result, const FString&, ErrorMsg);

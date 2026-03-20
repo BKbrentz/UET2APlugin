@@ -50,9 +50,9 @@ struct UET2APLUGIN_API FHunyuanMotionRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "T2A|API")
 	bool bDisableRewrite = false;
 
-	/** Disable automatic duration estimation */
+	/** Disable automatic duration estimation so Duration is treated as an explicit target by default */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "T2A|API")
-	bool bDisableDurationEstimate = false;
+	bool bDisableDurationEstimate = true;
 };
 
 /** Single motion result entry from the API */
