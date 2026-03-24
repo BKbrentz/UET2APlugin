@@ -12,8 +12,10 @@
 #include "Misc/Guid.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
+#include "Misc/EngineVersionComparison.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
+
 
 #if WITH_FBX_SDK
 // Disable warnings from FBX SDK headers
@@ -588,26 +590,19 @@ USkeleton* URuntimeFBXImporter::BuildSkeleton(const FT2ASkeletonData& SkeletonDa
 		Skeleton = NewObject<USkeleton>(GetTransientPackage(), NAME_None, RF_Transient);
 	}
 
-	// Set reference skeleton - use the merge path which is more robust across UE5 versions
-	// We need to create a temporary skeletal mesh to properly initialize the skeleton
-	USkeletalMesh* TempMesh = NewObject<USkeletalMesh>(GetTransientPackage(), NAME_None, RF_Transient);
-
-	// Set the reference skeleton on the mesh's imported model
-	FReferenceSkeleton& MeshRefSkel = TempMesh->GetRefSkeleton();
+	// Directly author the skeleton's reference data instead of mutating a temporary
+	// USkeletalMesh. In UE5.6, USkeletalMesh::GetRefSkeleton() is exposed as const in
+	// common call sites, so writing through a temp mesh is brittle on Windows builds.
 	{
-		FReferenceSkeletonModifier MeshModifier(MeshRefSkel, Skeleton);
+		FReferenceSkeletonModifier SkeletonModifier(Skeleton);
 		for (int32 BoneIdx = 0; BoneIdx < SkeletonData.Bones.Num(); BoneIdx++)
 		{
 			const FT2ASkeletonData::FBoneInfo& Bone = SkeletonData.Bones[BoneIdx];
-			FMeshBoneInfo BoneInfo;
-			BoneInfo.Name = FName(*Bone.Name);
-			BoneInfo.ParentIndex = Bone.ParentIndex;
-			MeshModifier.Add(BoneInfo, Bone.LocalTransform);
+			const FName BoneName(*Bone.Name);
+			FMeshBoneInfo BoneInfo(BoneName, Bone.Name, Bone.ParentIndex);
+			SkeletonModifier.Add(BoneInfo, Bone.LocalTransform);
 		}
 	}
-
-	// Use MergeAllBonesToBoneTree to properly set up the skeleton
-	Skeleton->MergeAllBonesToBoneTree(TempMesh);
 
 #if WITH_EDITOR
 	if (bSaveToContent)
@@ -659,10 +654,10 @@ UAnimSequence* URuntimeFBXImporter::BuildAnimSequence(const FT2AAnimationData& A
 
 	AnimSequence->SetSkeleton(Skeleton);
 
-	// Use IAnimationDataController (UE 5.2+) and explicitly initialize the data model.
-	// Freshly created transient AnimSequences can otherwise hit SequencerDataModel validation
-	// paths before the internal MovieScene exists, which produces
-	// "No Movie Scene found for SequencerDataModel".
+	// Use IAnimationDataController (UE 5.2+) to populate the AnimSequence data model.
+	// UE5.6's controller still requires InitializeModel/NotifyPopulated to flush authored
+	// frame/track data back into the asset; skipping NotifyPopulated leaves the saved asset
+	// effectively empty (0 duration, tiny uasset). Call the lifecycle hooks on both 5.6 and 5.7.
 	const int32 SafeFrameRate = FMath::Max(FMath::RoundToInt(AnimData.FrameRate), 1);
 	const int32 SafeNumberOfFrames = FMath::Max(AnimData.NumFrames, 1);
 
@@ -676,6 +671,8 @@ UAnimSequence* URuntimeFBXImporter::BuildAnimSequence(const FT2AAnimationData& A
 	Controller.InitializeModel();
 	Controller.SetFrameRate(FFrameRate(SafeFrameRate, 1), false);
 	Controller.SetNumberOfFrames(FFrameNumber(SafeNumberOfFrames), false);
+
+
 
 	const FReferenceSkeleton& RefSkeleton = Skeleton->GetReferenceSkeleton();
 
@@ -714,9 +711,12 @@ UAnimSequence* URuntimeFBXImporter::BuildAnimSequence(const FT2AAnimationData& A
 		}
 	}
 
+#if UE_VERSION_NEWER_THAN(5, 5, 99)
 	Controller.NotifyPopulated();
+#endif
 	Controller.CloseBracket(false);
 	AnimSequence->WaitOnExistingCompression();
+
 
 #if WITH_EDITOR
 	if (bSaveToContent)

@@ -2,7 +2,9 @@
 
 using UnrealBuildTool;
 
+[SupportedTargetTypes(TargetType.Editor)]
 public class UET2APluginEditor : ModuleRules
+
 {
 	public UET2APluginEditor(ReadOnlyTargetRules Target) : base(Target)
 	{
