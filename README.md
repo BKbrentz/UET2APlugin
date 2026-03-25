@@ -2,11 +2,12 @@
 
 基于混元 Motion API 的 Unreal Engine 文生动画插件。
 
-当前版本聚焦一条纯运行时链路：
+当前版本同时提供两条接入方式：
 
-文本提示词 → 提交任务 → 轮询状态 → 下载 FBX → 导入动画
+- **运行时 / 蓝图链路**：文本提示词 → 提交任务 → 轮询状态 → 下载 FBX → 导入动画
+- **编辑器面板链路**：在编辑器态直接生成并导入动画资产到 Content Browser
 
-插件只负责生成并返回动画对象，播放和业务消费由项目侧自行处理。
+运行时链路负责生成并返回动画对象；编辑器面板链路负责直接落盘为项目资产。动画的播放和业务消费仍由项目侧自行处理。
 
 ## 适用版本
 - 已在 **Unreal Engine 5.6、5.7** 下联调
@@ -16,8 +17,8 @@
 - 异步轮询任务状态
 - 下载并导入 FBX 动画
 - 可选复用目标 `SkeletalMesh` 的 `Skeleton`
-- 编辑器下默认将导入结果保存到 Content Browser
-- 也支持直接导入本地 FBX 走同一条导入链路
+- 支持在编辑器态直接生成并保存动画资产到 Content Browser
+- 运行时链路与编辑器面板复用同一套核心导入链路
 
 ## 安装
 推荐作为项目插件放入：
@@ -87,13 +88,27 @@ http://api.taiji.woa.com
 Window > Text-to-Animation
 ```
 
-面板支持：
-- 输入 API Key
-- 输入动作描述
-- 导入本地 FBX 做测试
-- 查看进度和结果摘要
+面板用于在 **编辑器态** 直接生成并导入 T2A 动画资产到项目目录，**不依赖 PIE，也不需要运行时子系统**。
 
-使用面板前请先进入 PIE，否则拿不到运行时子系统。
+### 面板输入
+- `API Key`
+- `Animation Prompt`
+- `Duration`（范围 `1~12` 秒）
+- `Target SkeletalMesh`（可选）
+- `Import Path`（例如 `/Game/HunyuanMotion/Imported`）
+
+### 使用流程
+1. 在顶部填写 `API Key`，点击 `Apply`
+2. 输入动作描述、时长和目标导入目录
+3. 如需复用现有骨架，选择 `Target SkeletalMesh`
+4. 点击 `Generate and Import Asset`
+5. 在状态区查看提交、生成、下载、导入进度；如有需要可点击 `Cancel`
+
+### 导入结果
+- 选择了 `Target SkeletalMesh` 时，会优先复用其 `Skeleton` 导入动画资源
+- 未选择时，会按 FBX 骨架创建新的 `Skeleton` 与动画资源
+- `Import Path` 不存在时，会按给定 Unreal 资源路径创建并保存资产
+- 成功后状态栏会显示导入结果摘要；如果接口返回了改写后的 Prompt，也会一并展示
 
 ## 运行流程
 1. 提交生成任务
@@ -153,12 +168,12 @@ T2A->RunPipeline(Config);
 
 ## 故障排查
 
-### 面板里提示 Subsystem not available
-先进入 PIE，再回到面板点击 `Save` 或 `Generate Animation`。
+### 面板里提示 API Key is not configured
+先确认已经在面板顶部填写并应用了 API Key，然后再点击 `Generate and Import Asset`。
 
 ### 生成成功但看不到可保存资产
-先检查当前是否运行在编辑器环境，以及输出目录是否仍是默认的 `/Game/HunyuanMotion/Imported`。
-如果是在非编辑器环境，插件会自动回退为运行时临时对象，这种情况下不会出现在 Content Browser。
+先检查 `Import Path` 是否为合法的 Unreal 资源路径（例如 `/Game/HunyuanMotion/Imported`）。
+如果你选择的是编辑器面板流程，生成成功后动画应直接保存到 Content Browser 对应目录。
 
 ### 导入时报骨架不兼容
 如果你传了 `TargetSkeletalMesh`，请确认：

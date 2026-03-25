@@ -1,29 +1,41 @@
 // Copyright UET2A Team. All Rights Reserved.
 
 #include "ST2AEditorPanel.h"
-#include "T2AAnimationSubsystem.h"
+#include "T2AEditorImportRunner.h"
 #include "UET2APlugin.h"
+#include "AssetRegistry/AssetData.h"
+#include "Engine/SkeletalMesh.h"
+#include "PropertyCustomizationHelpers.h"
+#include "Styling/CoreStyle.h"
+#include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SMultiLineEditableTextBox.h"
-#include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SSpinBox.h"
-#include "Widgets/Input/SCheckBox.h"
-#include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSeparator.h"
+#include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Text/STextBlock.h"
-#include "Editor.h"
-#include "Engine/GameInstance.h"
-#include "DesktopPlatformModule.h"
-#include "IDesktopPlatform.h"
-#include "Framework/Application/SlateApplication.h"
-#include "Misc/Paths.h"
-#include "Styling/CoreStyle.h"
 
 #define LOCTEXT_NAMESPACE "ST2AEditorPanel"
 
+ST2AEditorPanel::~ST2AEditorPanel()
+{
+	if (Runner)
+	{
+		Runner->Cancel();
+		Runner->RemoveFromRoot();
+		Runner = nullptr;
+	}
+}
+
 void ST2AEditorPanel::Construct(const FArguments& InArgs)
 {
+	Runner = NewObject<UT2AEditorImportRunner>(GetTransientPackage());
+	Runner->AddToRoot();
+	Runner->OnProgress.AddSP(SharedThis(this), &ST2AEditorPanel::OnPipelineProgress);
+	Runner->OnCompleted.AddSP(SharedThis(this), &ST2AEditorPanel::OnPipelineCompleted);
+	Runner->OnFailed.AddSP(SharedThis(this), &ST2AEditorPanel::OnPipelineFailed);
+
 	ChildSlot
 	[
 		SNew(SScrollBox)
@@ -32,17 +44,15 @@ void ST2AEditorPanel::Construct(const FArguments& InArgs)
 		[
 			SNew(SVerticalBox)
 
-			// Title
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.Padding(0, 0, 0, 8)
 			[
 				SNew(STextBlock)
-				.Text(LOCTEXT("Title", "Hunyuan Text-to-Animation"))
+				.Text(LOCTEXT("Title", "Hunyuan Text-to-Animation Asset Importer"))
 				.Font(FCoreStyle::GetDefaultFontStyle("Bold", 16))
 			]
 
-			// API Key Config
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.Padding(0, 0, 0, 4)
@@ -57,15 +67,6 @@ void ST2AEditorPanel::Construct(const FArguments& InArgs)
 				SNew(SSeparator)
 			]
 
-			// Local FBX Input
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.Padding(0, 0, 0, 4)
-			[
-				BuildLocalFBXSection()
-			]
-
-			// Prompt Input
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.Padding(0, 0, 0, 4)
@@ -73,7 +74,6 @@ void ST2AEditorPanel::Construct(const FArguments& InArgs)
 				BuildPromptInputSection()
 			]
 
-			// Parameters
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.Padding(0, 0, 0, 4)
@@ -81,7 +81,6 @@ void ST2AEditorPanel::Construct(const FArguments& InArgs)
 				BuildParameterSection()
 			]
 
-			// Playback target
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.Padding(0, 0, 0, 4)
@@ -96,7 +95,6 @@ void ST2AEditorPanel::Construct(const FArguments& InArgs)
 				SNew(SSeparator)
 			]
 
-			// Action Buttons
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.Padding(0, 0, 0, 4)
@@ -104,7 +102,6 @@ void ST2AEditorPanel::Construct(const FArguments& InArgs)
 				BuildActionSection()
 			]
 
-			// Status
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.Padding(0, 0, 0, 4)
@@ -146,60 +143,18 @@ TSharedRef<SWidget> ST2AEditorPanel::BuildAPIConfigSection()
 			.Padding(4, 0, 0, 0)
 			[
 				SNew(SButton)
-				.Text(LOCTEXT("SaveKey", "Save"))
+				.Text(LOCTEXT("SaveKey", "Apply"))
 				.OnClicked(this, &ST2AEditorPanel::OnSaveAPIKeyClicked)
 			]
-		];
-}
-
-TSharedRef<SWidget> ST2AEditorPanel::BuildLocalFBXSection()
-{
-	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("LocalFBXLabel", "Local FBX Test Input"))
-			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
-		]
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(0, 2, 0, 0)
-		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot()
-			.FillWidth(1.0f)
-			[
-				SAssignNew(LocalFBXInput, SEditableTextBox)
-				.HintText(LOCTEXT("LocalFBXHint", "Optional: choose a local animation FBX for testing..."))
-				.OnTextChanged_Lambda([this](const FText& Text)
-				{
-					LocalFBXFilePath = Text.ToString();
-				})
-			]
-			+ SHorizontalBox::Slot()
-			.AutoWidth()
-			.Padding(4, 0, 0, 0)
-			[
-				SNew(SButton)
-				.Text(LOCTEXT("BrowseLocalFBX", "Browse..."))
-				.OnClicked(this, &ST2AEditorPanel::OnBrowseLocalFBXClicked)
-			]
 		]
 		+ SVerticalBox::Slot()
 		.AutoHeight()
 		.Padding(0, 2, 0, 0)
 		[
 			SNew(STextBlock)
-			.Text(LOCTEXT("LocalFBXNote", "If a local FBX is set, the panel skips API generation/download and directly imports this file through the current FBX import flow."))
+			.Text(LOCTEXT("APIKeyNote", "面板会在编辑器态直接调用混元生成并把动画导入到项目资源目录，不需要先启动 PIE。"))
 			.AutoWrapText(true)
 			.ColorAndOpacity(FSlateColor(FLinearColor(0.65f, 0.65f, 0.65f)))
-		]
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(0, 8, 0, 0)
-		[
-			SNew(SSeparator)
 		];
 }
 
@@ -210,7 +165,7 @@ TSharedRef<SWidget> ST2AEditorPanel::BuildPromptInputSection()
 		.AutoHeight()
 		[
 			SNew(STextBlock)
-			.Text(LOCTEXT("PromptLabel", "Animation Description"))
+			.Text(LOCTEXT("PromptLabel", "Animation Prompt"))
 			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
 		]
 		+ SVerticalBox::Slot()
@@ -229,40 +184,62 @@ TSharedRef<SWidget> ST2AEditorPanel::BuildPromptInputSection()
 
 TSharedRef<SWidget> ST2AEditorPanel::BuildParameterSection()
 {
-	return SNew(SHorizontalBox)
-		// Duration
-		+ SHorizontalBox::Slot()
-		.AutoWidth()
-		.Padding(0, 0, 16, 0)
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot()
+		.AutoHeight()
 		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight()
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.Padding(0, 0, 16, 0)
 			[
-				SNew(STextBlock).Text(LOCTEXT("DurationLabel", "Duration (s)"))
-			]
-			+ SVerticalBox::Slot().AutoHeight()
-			[
-				SNew(SSpinBox<int32>)
-				.MinValue(1)
-				.MaxValue(12)
-				.Value(Duration)
-				.OnValueChanged_Lambda([this](int32 Value) { Duration = Value; })
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("DurationLabel", "Duration (s)"))
+				]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(SSpinBox<int32>)
+					.MinValue(1)
+					.MaxValue(12)
+					.Value(Duration)
+					.OnValueChanged_Lambda([this](int32 Value)
+					{
+						Duration = Value;
+					})
+				]
 			]
 		]
-		// Disable Rewrite
-		+ SHorizontalBox::Slot()
-		.AutoWidth()
-		.VAlign(VAlign_Bottom)
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(0, 8, 0, 0)
 		[
-			SNew(SCheckBox)
-			.IsChecked(bDisableRewrite ? ECheckBoxState::Checked : ECheckBoxState::Unchecked)
-			.OnCheckStateChanged_Lambda([this](ECheckBoxState State) 
-			{ 
-				bDisableRewrite = (State == ECheckBoxState::Checked); 
+			SNew(STextBlock)
+			.Text(LOCTEXT("ImportPathLabel", "Import Path"))
+			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+		]
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(0, 2, 0, 0)
+		[
+			SAssignNew(ImportPathInput, SEditableTextBox)
+			.Text(FText::FromString(ImportPath))
+			.HintText(LOCTEXT("ImportPathHint", "/Game/HunyuanMotion/Imported"))
+			.OnTextChanged_Lambda([this](const FText& Text)
+			{
+				ImportPath = Text.ToString();
 			})
-			[
-				SNew(STextBlock).Text(LOCTEXT("DisableRewrite", "Disable Prompt Rewrite"))
-			]
+		]
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(0, 2, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("ImportPathNote", "填写 Unreal 资源路径，例如 /Game/HunyuanMotion/Imported。若路径不存在，导入器会按该目录创建并保存动画资源。"))
+			.AutoWrapText(true)
+			.ColorAndOpacity(FSlateColor(FLinearColor(0.65f, 0.65f, 0.65f)))
 		];
 }
 
@@ -273,26 +250,29 @@ TSharedRef<SWidget> ST2AEditorPanel::BuildTargetSection()
 		.AutoHeight()
 		[
 			SNew(STextBlock)
-			.Text(LOCTEXT("PipelineScopeLabel", "Pipeline Scope"))
+			.Text(LOCTEXT("TargetLabel", "Target SkeletalMesh"))
 			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
 		]
 		+ SVerticalBox::Slot()
 		.AutoHeight()
-		.Padding(0, 4, 0, 0)
+		.Padding(0, 2, 0, 0)
 		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("PipelineScopeNote", "当前版本只保留：提交生成任务、轮询结果、下载 FBX、运行时导入动画。不会自动重定向，也不会自动播放到 PIE 角色。生成完成后，请在业务蓝图或 C++ 中自行处理返回的 UAnimSequence。"))
-			.AutoWrapText(true)
-			.ColorAndOpacity(FSlateColor(FLinearColor(0.85f, 0.85f, 0.85f)))
+			SNew(SObjectPropertyEntryBox)
+			.AllowedClass(USkeletalMesh::StaticClass())
+			.ObjectPath(this, &ST2AEditorPanel::GetTargetSkeletalMeshPath)
+			.DisplayUseSelected(true)
+			.DisplayBrowse(true)
+			.AllowClear(true)
+			.OnObjectChanged(this, &ST2AEditorPanel::OnTargetSkeletalMeshChanged)
 		]
 		+ SVerticalBox::Slot()
 		.AutoHeight()
 		.Padding(0, 4, 0, 0)
 		[
 			SNew(STextBlock)
-			.Text(LOCTEXT("PIERequirementNote", "提示：面板仍通过 PIE World 获取运行时子系统，所以使用前请先启动 PIE。"))
+			.Text(LOCTEXT("TargetNote", "如果选择了 Target SkeletalMesh，导入器会复用它的 Skeleton 来创建动画资源；不选择时会按 FBX 骨架创建新的 Skeleton 资源。"))
 			.AutoWrapText(true)
-			.ColorAndOpacity(FSlateColor(FLinearColor(0.65f, 0.65f, 0.65f)))
+			.ColorAndOpacity(FSlateColor(FLinearColor(0.85f, 0.85f, 0.85f)))
 		];
 }
 
@@ -304,14 +284,12 @@ TSharedRef<SWidget> ST2AEditorPanel::BuildActionSection()
 		.Padding(0, 0, 4, 0)
 		[
 			SNew(SButton)
-			.Text_Lambda([this]()
-			{
-				return LocalFBXFilePath.IsEmpty()
-					? LOCTEXT("Generate", "Generate Animation")
-					: LOCTEXT("ImportLocalFBXAction", "Import Local FBX");
-			})
+			.Text(LOCTEXT("GenerateAndImport", "Generate and Import Asset"))
 			.HAlign(HAlign_Center)
-			.IsEnabled_Lambda([this]() { return !bIsRunning; })
+			.IsEnabled_Lambda([this]()
+			{
+				return !bIsRunning;
+			})
 			.OnClicked(this, &ST2AEditorPanel::OnGenerateClicked)
 		]
 		+ SHorizontalBox::Slot()
@@ -319,7 +297,10 @@ TSharedRef<SWidget> ST2AEditorPanel::BuildActionSection()
 		[
 			SNew(SButton)
 			.Text(LOCTEXT("Cancel", "Cancel"))
-			.IsEnabled_Lambda([this]() { return bIsRunning; })
+			.IsEnabled_Lambda([this]()
+			{
+				return bIsRunning;
+			})
 			.OnClicked(this, &ST2AEditorPanel::OnCancelClicked)
 		];
 }
@@ -332,78 +313,82 @@ TSharedRef<SWidget> ST2AEditorPanel::BuildStatusSection()
 		.Padding(0, 4)
 		[
 			SAssignNew(ProgressBar, SProgressBar)
-			.Percent_Lambda([this]() { return ProgressValue; })
+			.Percent_Lambda([this]()
+			{
+				return ProgressValue;
+			})
 		]
 		+ SVerticalBox::Slot()
 		.AutoHeight()
 		[
 			SAssignNew(StatusLabel, STextBlock)
-			.Text_Lambda([this]() { return FText::FromString(StatusText); })
+			.Text_Lambda([this]()
+			{
+				return FText::FromString(StatusText);
+			})
+			.AutoWrapText(true)
 		];
 }
 
-// ==================== Callbacks ====================
-
 FReply ST2AEditorPanel::OnGenerateClicked()
 {
-	UT2AAnimationSubsystem* Subsystem = GetSubsystem();
-	if (!Subsystem)
+	if (!Runner)
 	{
-		StatusText = TEXT("Error: T2A Subsystem not available. Start PIE first.");
+		StatusText = TEXT("Editor import runner is unavailable.");
 		return FReply::Handled();
 	}
 
-	const bool bUseLocalFBX = !LocalFBXFilePath.IsEmpty();
-	if (!bUseLocalFBX && TextPrompt.IsEmpty())
+	if (APIKeyInput.IsValid())
 	{
-		StatusText = TEXT("Please enter a text prompt.");
+		APIKey = APIKeyInput->GetText().ToString().TrimStartAndEnd();
+	}
+
+	TextPrompt = TextPrompt.TrimStartAndEnd();
+	ImportPath = ImportPath.TrimStartAndEnd();
+
+	if (APIKey.IsEmpty())
+	{
+		StatusText = TEXT("Please enter an API Key.");
 		return FReply::Handled();
 	}
 
-	if (bUseLocalFBX)
+	if (TextPrompt.IsEmpty())
 	{
-		LocalFBXFilePath = FPaths::ConvertRelativePathToFull(LocalFBXFilePath);
-		if (!FPaths::FileExists(LocalFBXFilePath))
-		{
-			StatusText = FString::Printf(TEXT("Local FBX not found: %s"), *LocalFBXFilePath);
-			return FReply::Handled();
-		}
-
-		if (LocalFBXInput.IsValid())
-		{
-			LocalFBXInput->SetText(FText::FromString(LocalFBXFilePath));
-		}
+		StatusText = TEXT("Please enter an animation prompt.");
+		return FReply::Handled();
 	}
 
-	// Configure pipeline
-	FT2APipelineConfig Config;
-	Config.TextPrompt = TextPrompt;
-	Config.Duration = Duration;
-	Config.bDisableRewrite = bDisableRewrite;
-	Config.LocalFBXFilePath = LocalFBXFilePath;
+	if (ImportPath.IsEmpty())
+	{
+		StatusText = TEXT("Please enter an import path.");
+		return FReply::Handled();
+	}
+
+	if (ImportPathInput.IsValid())
+	{
+		ImportPathInput->SetText(FText::FromString(ImportPath));
+	}
+
+	Runner->SetAPIKey(APIKey);
 
 	bIsRunning = true;
 	ProgressValue = 0.0f;
-	StatusText = bUseLocalFBX
-		? FString::Printf(TEXT("Importing local FBX: %s"), *FPaths::GetCleanFilename(LocalFBXFilePath))
-		: TEXT("Submitting...");
-
-	BindSubsystemDelegates(Subsystem);
-	Subsystem->RunPipeline(Config);
+	StatusText = FString::Printf(TEXT("Submitting animation generation for import path %s..."), *ImportPath);
+	Runner->RunImport(TextPrompt, Duration, TargetSkeletalMesh.Get(), ImportPath);
 
 	return FReply::Handled();
 }
 
 FReply ST2AEditorPanel::OnCancelClicked()
 {
-	UT2AAnimationSubsystem* Subsystem = GetSubsystem();
-	if (Subsystem)
+	if (Runner)
 	{
-		Subsystem->CancelPipeline();
+		Runner->Cancel();
 	}
+
 	bIsRunning = false;
-	StatusText = TEXT("Cancelled");
 	ProgressValue = 0.0f;
+	StatusText = TEXT("Cancelled.");
 	return FReply::Handled();
 }
 
@@ -411,122 +396,42 @@ FReply ST2AEditorPanel::OnSaveAPIKeyClicked()
 {
 	if (APIKeyInput.IsValid())
 	{
-		APIKey = APIKeyInput->GetText().ToString();
+		APIKey = APIKeyInput->GetText().ToString().TrimStartAndEnd();
 	}
 
-	UT2AAnimationSubsystem* Subsystem = GetSubsystem();
-	if (Subsystem)
+	if (APIKey.IsEmpty())
 	{
-		Subsystem->SetAPIKey(APIKey);
-		StatusText = TEXT("API Key saved.");
-	}
-	else
-	{
-		StatusText = TEXT("API Key stored. Will apply when PIE starts.");
-	}
-	return FReply::Handled();
-}
-
-FReply ST2AEditorPanel::OnBrowseLocalFBXClicked()
-{
-	IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
-	if (!DesktopPlatform)
-	{
-		StatusText = TEXT("Desktop file dialog is unavailable.");
+		StatusText = TEXT("Please enter an API Key first.");
 		return FReply::Handled();
 	}
 
-	const FString DefaultFile = LocalFBXFilePath;
-	const FString DefaultDirectory = DefaultFile.IsEmpty()
-		? FPaths::ProjectDir()
-		: FPaths::GetPath(DefaultFile);
-
-	TArray<FString> SelectedFiles;
-	const bool bSelected = DesktopPlatform->OpenFileDialog(
-		FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr),
-		TEXT("Select Animation FBX"),
-		DefaultDirectory,
-		DefaultFile,
-		TEXT("FBX files (*.fbx)|*.fbx"),
-		EFileDialogFlags::None,
-		SelectedFiles);
-
-	if (bSelected && SelectedFiles.Num() > 0)
+	if (Runner)
 	{
-		LocalFBXFilePath = SelectedFiles[0];
-		if (LocalFBXInput.IsValid())
-		{
-			LocalFBXInput->SetText(FText::FromString(LocalFBXFilePath));
-		}
-		StatusText = FString::Printf(TEXT("Selected local FBX: %s"), *FPaths::GetCleanFilename(LocalFBXFilePath));
+		Runner->SetAPIKey(APIKey);
 	}
 
+	StatusText = TEXT("API Key applied to editor import pipeline.");
 	return FReply::Handled();
 }
 
-UWorld* ST2AEditorPanel::GetPIEWorld() const
+void ST2AEditorPanel::OnTargetSkeletalMeshChanged(const FAssetData& AssetData)
 {
-	if (!GEditor || !GEngine)
+	TargetSkeletalMesh = Cast<USkeletalMesh>(AssetData.GetAsset());
+
+	if (TargetSkeletalMesh.IsValid())
 	{
-		return nullptr;
+		StatusText = FString::Printf(TEXT("Selected Target SkeletalMesh: %s"), *TargetSkeletalMesh->GetPathName());
 	}
-
-	for (const FWorldContext& Context : GEngine->GetWorldContexts())
+	else
 	{
-		if (Context.WorldType == EWorldType::PIE && Context.World())
-		{
-			return Context.World();
-		}
-	}
-
-	return nullptr;
-}
-
-void ST2AEditorPanel::BindSubsystemDelegates(UT2AAnimationSubsystem* Subsystem)
-{
-	if (!Subsystem)
-	{
-		return;
-	}
-
-	UnbindSubsystemDelegates(Subsystem);
-
-	TSharedRef<ST2AEditorPanel> SharedPanel = SharedThis(this);
-	PipelineProgressHandle = Subsystem->OnPipelineProgressNative.AddSP(SharedPanel, &ST2AEditorPanel::OnPipelineProgress);
-	PipelineCompletedHandle = Subsystem->OnPipelineCompletedNative.AddSP(SharedPanel, &ST2AEditorPanel::OnPipelineCompleted);
-	PipelineFailedHandle = Subsystem->OnPipelineFailedNative.AddSP(SharedPanel, &ST2AEditorPanel::OnPipelineFailed);
-}
-
-void ST2AEditorPanel::UnbindSubsystemDelegates(UT2AAnimationSubsystem* Subsystem)
-{
-	if (!Subsystem)
-	{
-		return;
-	}
-
-	if (PipelineProgressHandle.IsValid())
-	{
-		Subsystem->OnPipelineProgressNative.Remove(PipelineProgressHandle);
-		PipelineProgressHandle = FDelegateHandle();
-	}
-
-	if (PipelineCompletedHandle.IsValid())
-	{
-		Subsystem->OnPipelineCompletedNative.Remove(PipelineCompletedHandle);
-		PipelineCompletedHandle = FDelegateHandle();
-	}
-
-	if (PipelineFailedHandle.IsValid())
-	{
-		Subsystem->OnPipelineFailedNative.Remove(PipelineFailedHandle);
-		PipelineFailedHandle = FDelegateHandle();
+		StatusText = TEXT("Target SkeletalMesh cleared. Importer will create a new skeleton asset from the FBX.");
 	}
 }
 
 void ST2AEditorPanel::OnPipelineProgress(ET2APipelineStage Stage, float Progress, const FString& StatusMessage)
 {
-	static_cast<void>(Stage);
-	ProgressValue = Progress;
+	bIsRunning = Stage != ET2APipelineStage::Completed && Stage != ET2APipelineStage::Failed;
+	ProgressValue = FMath::Clamp(Progress, 0.0f, 1.0f);
 	StatusText = StatusMessage;
 }
 
@@ -535,16 +440,12 @@ void ST2AEditorPanel::OnPipelineCompleted(UAnimSequence* Animation, const FStrin
 	bIsRunning = false;
 	ProgressValue = 1.0f;
 
-	if (UT2AAnimationSubsystem* Subsystem = GetSubsystem())
-	{
-		StatusText = Subsystem->GetLastCompletionSummary();
-	}
-
+	StatusText = Runner ? Runner->GetLastCompletionSummary() : TEXT("Done! Animation asset imported successfully.");
 	if (StatusText.IsEmpty())
 	{
 		StatusText = Animation
 			? FString::Printf(TEXT("Done! Imported animation: %s"), *Animation->GetName())
-			: TEXT("Done! Animation imported successfully.");
+			: TEXT("Done! Animation asset imported successfully.");
 	}
 
 	if (!RewrittenPrompt.IsEmpty())
@@ -560,17 +461,9 @@ void ST2AEditorPanel::OnPipelineFailed(ET2APipelineStage FailedStage, const FStr
 	StatusText = FString::Printf(TEXT("Failed: %s"), *ErrorMessage);
 }
 
-UT2AAnimationSubsystem* ST2AEditorPanel::GetSubsystem() const
+FString ST2AEditorPanel::GetTargetSkeletalMeshPath() const
 {
-	if (UWorld* PIEWorld = GetPIEWorld())
-	{
-		if (UGameInstance* GI = PIEWorld->GetGameInstance())
-		{
-			return GI->GetSubsystem<UT2AAnimationSubsystem>();
-		}
-	}
-
-	return nullptr;
+	return TargetSkeletalMesh.IsValid() ? TargetSkeletalMesh->GetPathName() : FString();
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -27,7 +27,9 @@ public class UET2APluginEditor : ModuleRules
 			"ToolMenus",
 			"WorkspaceMenuStructure",
 			"DesktopPlatform",
-			"ApplicationCore"
+			"ApplicationCore",
+			"PropertyEditor",
+			"AssetRegistry"
 		});
 	}
 }
